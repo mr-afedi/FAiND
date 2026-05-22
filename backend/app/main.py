@@ -13,6 +13,7 @@ from app.api.users import router as users_router
 from app.api.items import router as items_router
 from app.api.matches import router as matches_router
 from app.api.notifications import router as notifications_router
+from app.api.push import router as push_router
 
 settings = get_settings()
 
@@ -47,6 +48,7 @@ app.include_router(users_router, prefix="/api/v1")
 app.include_router(items_router, prefix="/api/v1")
 app.include_router(matches_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
+app.include_router(push_router, prefix="/api/v1")
 
 
 @app.get("/health")

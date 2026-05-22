@@ -1,5 +1,6 @@
 import { Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
+import PushPromptBanner from './components/PushPromptBanner'
 
 // Pages
 import HomePage            from './pages/HomePage'
@@ -42,6 +43,8 @@ function NotFoundPage() {
 export default function App() {
   return (
     <AuthProvider>
+      {/* Global overlays — available on every page */}
+      <PushPromptBanner />
       <Routes>
         {/* Public */}
         <Route path="/" element={<HomePage />} />

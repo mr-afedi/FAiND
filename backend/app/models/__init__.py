@@ -8,6 +8,7 @@ from app.models.item import Item, ItemHiddenQuestion, ItemType, ItemStatus, Item
 from app.models.trust_event import TrustEvent, TrustEventReason
 from app.models.potential_match import PotentialMatch, PotentialMatchStatus
 from app.models.notification import Notification, NotificationType
+from app.models.push_subscription import PushSubscription
 
 __all__ = [
     "University",
@@ -27,4 +28,5 @@ __all__ = [
     "PotentialMatchStatus",
     "Notification",
     "NotificationType",
+    "PushSubscription",
 ]

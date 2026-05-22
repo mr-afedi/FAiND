@@ -91,3 +91,6 @@ class User(Base):
     password_resets: Mapped[list["PasswordReset"]] = relationship(
         "PasswordReset", back_populates="user", cascade="all, delete-orphan"
     )
+    push_subscriptions: Mapped[list["PushSubscription"]] = relationship(
+        "PushSubscription", back_populates="user", cascade="all, delete-orphan"
+    )

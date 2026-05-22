@@ -6,6 +6,7 @@ import { userService } from '../services/userService'
 import { uploadImageToCloudinary } from '../services/itemService'
 import { useAuth } from '../context/AuthContext'
 import NavBar from '../components/NavBar'
+import { usePushNotifications } from '../hooks/usePushNotifications'
 
 // ── Reusable toggle component ─────────────────────────────────────────────────
 
@@ -133,6 +134,13 @@ export default function SettingsPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { logout } = useAuth()
+  const {
+    supported: pushSupported,
+    permissionState,
+    isSubscribed,
+    requestPermissionAndSubscribe,
+    unsubscribe: pushUnsubscribe,
+  } = usePushNotifications()
 
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
 
@@ -305,7 +313,26 @@ export default function SettingsPage() {
     })
   }
 
-  function handleToggle(key, value) {
+  async function handleToggle(key, value) {
+    if (key === 'push_notifications_enabled') {
+      if (value) {
+        if (!pushSupported) {
+          toast.error('Your browser does not support push notifications.')
+          return
+        }
+        if (permissionState === 'denied') {
+          toast.error(
+            'Push notifications are blocked. Please allow them in your browser settings.'
+          )
+          return
+        }
+        const ok = await requestPermissionAndSubscribe()
+        if (!ok) return
+        toast.success('Push notifications enabled.')
+      } else {
+        await pushUnsubscribe()
+      }
+    }
     updateSettingsMutation.mutate({ [key]: value })
   }
 
@@ -493,10 +520,16 @@ export default function SettingsPage() {
             description="Get notified when new lost items are reported on campus"
           />
           <Toggle
-            on={profile?.push_notifications_enabled ?? false}
+            on={(profile?.push_notifications_enabled && isSubscribed) ?? false}
             onChange={(v) => handleToggle('push_notifications_enabled', v)}
             label="Push Notifications"
-            description="Browser / PWA push notifications for matches and messages"
+            description={
+              permissionState === 'denied'
+                ? '⚠️ Blocked by browser — allow in browser settings then try again'
+                : !pushSupported
+                ? 'Not supported in this browser'
+                : 'Get push alerts for matches and messages, even when the app is closed'
+            }
           />
           <Toggle
             on={profile?.email_notifications_enabled ?? false}

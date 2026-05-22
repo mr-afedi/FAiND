@@ -306,6 +306,7 @@ def _create_potential_match(
         found_owner_id=found_item.posted_by_id,
         match_id=match.id,
         lost_item_id=lost_item.id,
+        found_item_id=found_item.id,
         score_pct=pct,
     )
     return match
@@ -323,28 +324,23 @@ def run_matching_for_item(db: Session, item_id: uuid.UUID) -> list[PotentialMatc
         .first()
     )
     if not source:
-        logger.warning("run_matching_for_item: item %s not found", item_id)
+        print(f"[Matching] WARNING: item {item_id} not found in DB", flush=True)
         return []
 
     if source.status not in _POOL_STATUSES:
         return []
 
     candidates = _get_opposing_candidates(db, source)
-    logger.info(
-        "\n╔══════════════════════════════════════════════════════════════╗"
-        "\n║  AI MATCHING ENGINE — new %s item posted"
-        "\n║  Item ID  : %s"
-        "\n║  Category : %s"
-        "\n║  Location : %s"
-        "\n║  Date     : %s"
-        "\n║  Candidates found: %d"
-        "\n╚══════════════════════════════════════════════════════════════╝",
-        source.item_type.value.upper(),
-        source.id,
-        source.category.value,
-        source.location_label or "unknown",
-        source.date_occurred.strftime("%Y-%m-%d") if source.date_occurred else "unknown",
-        len(candidates),
+    print(
+        f"\n╔══════════════════════════════════════════════════════════════╗"
+        f"\n║  AI MATCHING ENGINE — new {source.item_type.value.upper()} item posted"
+        f"\n║  Item ID  : {source.id}"
+        f"\n║  Category : {source.category.value}"
+        f"\n║  Location : {source.location_label or 'unknown'}"
+        f"\n║  Date     : {source.date_occurred.strftime('%Y-%m-%d') if source.date_occurred else 'unknown'}"
+        f"\n║  Candidates found: {len(candidates)}"
+        f"\n╚══════════════════════════════════════════════════════════════╝",
+        flush=True,
     )
 
     created: list[PotentialMatch] = []
@@ -356,9 +352,9 @@ def run_matching_for_item(db: Session, item_id: uuid.UUID) -> list[PotentialMatc
             lost_item, found_item = candidate, source
 
         if _existing_match(db, lost_item.id, found_item.id):
-            logger.info(
-                "[Matching] SKIP  lost=%-36s ↔ found=%-36s  reason=already_matched",
-                lost_item.id, found_item.id,
+            print(
+                f"[Matching] SKIP  lost={lost_item.id} ↔ found={found_item.id}  reason=already_matched",
+                flush=True,
             )
             continue
 
@@ -366,31 +362,24 @@ def run_matching_for_item(db: Session, item_id: uuid.UUID) -> list[PotentialMatc
         w = breakdown.get("weights", {})
         matched = score >= MATCH_THRESHOLD
 
-        logger.info(
-            "\n┌─ Comparing ──────────────────────────────────────────────────"
-            "\n│  Lost  : %s  [%s]  \"%s\""
-            "\n│  Found : %s  [%s]  \"%s\""
-            "\n├─ Score Breakdown ────────────────────────────────────────────"
-            "\n│  Description  : %.4f  (weight %.2f)"
-            "\n│  Image        : %.4f  (weight %.2f)"
-            "\n│  Location     : %.4f  (weight %.2f)"
-            "\n│  Date         : %.4f  (weight %.2f)"
-            "\n│  Category     : %.4f  (weight %.2f)"
-            "\n├─ Result ─────────────────────────────────────────────────────"
-            "\n│  Overall score : %.4f  (threshold %.2f)"
-            "\n│  Decision      : %s"
-            "\n└──────────────────────────────────────────────────────────────",
-            lost_item.id,  lost_item.category.value,
-            (lost_item.public_description or "")[:60].replace("\n", " "),
-            found_item.id, found_item.category.value,
-            (found_item.public_description or "")[:60].replace("\n", " "),
-            breakdown.get("description", 0), w.get("description", 0),
-            breakdown.get("image",       0), w.get("image",       0),
-            breakdown.get("location",    0), w.get("location",    0),
-            breakdown.get("date",        0), w.get("date",        0),
-            breakdown.get("category",    0), w.get("category",    0),
-            score, MATCH_THRESHOLD,
-            "✅ PotentialMatch CREATED" if matched else f"❌ Below threshold — skipped",
+        decision = "✅ PotentialMatch CREATED" if matched else "❌ Below threshold — skipped"
+        print(
+            f"\n┌─ Comparing ──────────────────────────────────────────────────"
+            f"\n│  Lost  : {lost_item.id}  [{lost_item.category.value}]"
+            f"\n│          \"{(lost_item.public_description or '')[:60].replace(chr(10), ' ')}\""
+            f"\n│  Found : {found_item.id}  [{found_item.category.value}]"
+            f"\n│          \"{(found_item.public_description or '')[:60].replace(chr(10), ' ')}\""
+            f"\n├─ Score Breakdown ────────────────────────────────────────────"
+            f"\n│  Description  : {breakdown.get('description', 0):.4f}  (weight {w.get('description', 0):.2f})"
+            f"\n│  Image        : {breakdown.get('image', 0):.4f}  (weight {w.get('image', 0):.2f})"
+            f"\n│  Location     : {breakdown.get('location', 0):.4f}  (weight {w.get('location', 0):.2f})"
+            f"\n│  Date         : {breakdown.get('date', 0):.4f}  (weight {w.get('date', 0):.2f})"
+            f"\n│  Category     : {breakdown.get('category', 0):.4f}  (weight {w.get('category', 0):.2f})"
+            f"\n├─ Result ─────────────────────────────────────────────────────"
+            f"\n│  Overall score : {score:.4f}  (threshold {MATCH_THRESHOLD:.2f})"
+            f"\n│  Decision      : {decision}"
+            f"\n└──────────────────────────────────────────────────────────────",
+            flush=True,
         )
 
         if not matched:
@@ -401,14 +390,14 @@ def run_matching_for_item(db: Session, item_id: uuid.UUID) -> list[PotentialMatc
 
     if created:
         db.commit()
-        logger.info(
-            "[Matching] ✅ Done — %d PotentialMatch record(s) saved for item %s",
-            len(created), source.id,
+        print(
+            f"\n[Matching] ✅ Done — {len(created)} PotentialMatch record(s) saved for item {source.id}\n",
+            flush=True,
         )
     else:
-        logger.info(
-            "[Matching] ✅ Done — no matches above threshold for item %s",
-            source.id,
+        print(
+            f"\n[Matching] ✅ Done — no matches above threshold for item {source.id}\n",
+            flush=True,
         )
     return created
 
