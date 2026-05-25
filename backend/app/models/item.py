@@ -109,7 +109,8 @@ class Item(Base):
 
 class ItemHiddenQuestion(Base):
     """
-    Verification Q&A for lost items (Section 6.2).
+    Verification Q&A for found items (Section 7, V4.2).
+    Set by the finder; answered by the owner during Path A/C verification.
     Both question and answer are AES-256-GCM encrypted.
     Immutable after submission — no UPDATE permitted in service layer.
     """

@@ -14,6 +14,7 @@ import { useState } from 'react'
 import { usePushNotifications } from '../hooks/usePushNotifications'
 import { useAuth } from '../context/AuthContext'
 import toast from 'react-hot-toast'
+import { Bell } from './icons'
 
 const DISMISSED_KEY = 'faind:push_prompt_dismissed'
 
@@ -39,7 +40,7 @@ export default function PushPromptBanner() {
     if (ok) {
         toast.success('Push notifications enabled! You will be alerted for matches and messages.')
     } else {
-      toast('You can enable push notifications later in Settings.', { icon: '🔔' })
+      toast('You can enable push notifications later in Settings.', { icon: <Bell className="w-5 h-5" /> })
     }
     setDismissed(true)
     localStorage.setItem(DISMISSED_KEY, 'true')
@@ -53,7 +54,7 @@ export default function PushPromptBanner() {
   return (
     <div className="fixed bottom-20 left-0 right-0 z-50 flex justify-center px-4 pointer-events-none">
       <div className="pointer-events-auto w-full max-w-sm bg-white dark:bg-gray-800 border border-blue-200 dark:border-blue-700 rounded-2xl shadow-2xl p-4 flex gap-3 items-start">
-        <div className="text-2xl mt-0.5">🔔</div>
+        <Bell className="w-6 h-6 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" aria-hidden />
         <div className="flex-1">
           <p className="text-sm font-semibold text-gray-900 dark:text-white">
             Turn on push notifications?

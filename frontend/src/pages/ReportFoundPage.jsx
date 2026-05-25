@@ -4,32 +4,24 @@
  * Key differences from Lost Item form:
  *   - At least ONE image is MANDATORY — submission blocked without it
  *   - NO private description
- *   - NO hidden verification questions
+ *   - 2–3 hidden verification Q&A (finder sets, V4.2)
  *   - Initial status → FOUND (not OPEN)
  *   - Active period: 21 days
  */
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import NavBar from '../components/NavBar'
+import FinderVerificationQuestions from '../components/FinderVerificationQuestions'
 import {
-  getCampusZones,
   createFoundItem,
   uploadImageToCloudinary,
 } from '../services/itemService'
-
-const CATEGORIES = [
-  { value: 'electronics',  label: '📱 Electronics' },
-  { value: 'bag',          label: '🎒 Bag / Backpack' },
-  { value: 'id_card',      label: '🪪 ID / Card' },
-  { value: 'keys',         label: '🔑 Keys' },
-  { value: 'clothing',     label: '👕 Clothing' },
-  { value: 'books_notes',  label: '📚 Books / Notes' },
-  { value: 'wallet',       label: '👜 Wallet' },
-  { value: 'jewellery',    label: '💍 Jewellery' },
-  { value: 'other',        label: '📦 Other' },
-]
+import { invalidateAfterItemCreate } from '../utils/queryCache'
+import { useCampusZones, createInitialQuestions, newQuestion } from '../hooks/useCampusZones'
+import { X, Camera, Plus } from '../components/icons'
+import CategoryPicker from '../components/CategoryPicker'
 
 // ── Reusable field wrapper ────────────────────────────────────────────────────
 
@@ -75,7 +67,9 @@ function ImageUploadSlot({ index, preview, uploading, required, onSelect, onRemo
             onClick={(e) => { e.stopPropagation(); onRemove() }}
             className="absolute top-1 right-1 bg-red-600 text-white text-xs
                        rounded-full w-5 h-5 flex items-center justify-center hover:bg-red-700"
-          >✕</button>
+          >
+            <X className="w-3 h-3" aria-hidden />
+          </button>
         </>
       ) : uploading ? (
         <div className="flex flex-col items-center gap-1 text-slate-400">
@@ -85,7 +79,11 @@ function ImageUploadSlot({ index, preview, uploading, required, onSelect, onRemo
       ) : (
         <div className="flex flex-col items-center gap-1 select-none
                         text-slate-400 dark:text-slate-500">
-          <span className="text-2xl">{required ? '📷' : '+'}</span>
+          {required ? (
+            <Camera className="w-7 h-7" aria-hidden />
+          ) : (
+            <Plus className="w-7 h-7" aria-hidden />
+          )}
           <span className="text-xs text-center leading-tight px-1">
             {required ? 'Required' : 'Add photo'}
           </span>
@@ -99,6 +97,7 @@ function ImageUploadSlot({ index, preview, uploading, required, onSelect, onRemo
 
 export default function ReportFoundPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
 
   const [category, setCategory]         = useState('')
   const [description, setDescription]   = useState('')
@@ -107,17 +106,18 @@ export default function ReportFoundPage() {
   const [timeFound, setTimeFound]       = useState('')
   const [images, setImages]             = useState([null, null])
   const [uploadingIdx, setUploadingIdx] = useState(null)
+  const [questions, setQuestions]       = useState(() => createInitialQuestions(2))
 
   const submittingRef = useRef(false)
 
-  const { data: zonesData, isLoading: zonesLoading } = useQuery({
-    queryKey: ['campus-zones'],
-    queryFn: getCampusZones,
-  })
+  const todayMax = useMemo(() => new Date().toISOString().split('T')[0], [])
+
+  const { zones, zonesLoading } = useCampusZones()
 
   const { mutate: submit, isPending } = useMutation({
     mutationFn: createFoundItem,
     onSuccess: () => {
+      invalidateAfterItemCreate(queryClient, { type: 'found' })
       toast.success('Found item reported! Thank you for helping.')
       navigate('/dashboard')
     },
@@ -159,6 +159,22 @@ export default function ReportFoundPage() {
     })
   }
 
+  function setQuestion(id, field, value) {
+    setQuestions((prev) =>
+      prev.map((q) => (q.id === id ? { ...q, [field]: value } : q)),
+    )
+  }
+
+  function addQuestion() {
+    if (questions.length < 3) setQuestions((prev) => [...prev, newQuestion()])
+  }
+
+  function removeQuestion(id) {
+    if (questions.length > 2) {
+      setQuestions((prev) => prev.filter((q) => q.id !== id))
+    }
+  }
+
   // ── Submit ──────────────────────────────────────────────────────────────────
   function handleSubmit(e) {
     e.preventDefault()
@@ -168,6 +184,10 @@ export default function ReportFoundPage() {
     if (!category)           { submittingRef.current = false; return toast.error('Please select a category') }
     if (!description.trim()) { submittingRef.current = false; return toast.error('Description is required') }
     if (!dateFound)          { submittingRef.current = false; return toast.error('Date found is required') }
+    if (questions.some((q) => !q.question.trim() || !q.answer.trim())) {
+      submittingRef.current = false
+      return toast.error('All verification questions and answers must be filled in')
+    }
     if (uploadingIdx !== null){ submittingRef.current = false; return toast.error('Please wait for the image to finish uploading') }
 
     const imageUrls = images.filter((img) => img?.url).map((img) => img.url)
@@ -186,6 +206,10 @@ export default function ReportFoundPage() {
       location_id: locationId || null,
       date_occurred: dateOccurred,
       image_urls: imageUrls,
+      hidden_questions: questions.map((q) => ({
+        question: q.question.trim(),
+        answer: q.answer.trim(),
+      })),
     })
   }
 
@@ -236,22 +260,12 @@ export default function ReportFoundPage() {
           </div>
 
           {/* ── Item details ── */}
-          <div className="glass p-6">
+          <div className="glass p-6 relative z-[1] overflow-visible">
             <h2 className="section-heading mb-5">Item Details</h2>
             <div className="flex flex-col gap-5">
 
-              <Field label="Category" required>
-                <select
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  className="input-field"
-                  required
-                >
-                  <option value="">Select a category…</option>
-                  {CATEGORIES.map((c) => (
-                    <option key={c.value} value={c.value}>{c.label}</option>
-                  ))}
-                </select>
+              <Field label="Category" required hint="Choose the category that best matches your item.">
+                <CategoryPicker value={category} onChange={setCategory} />
               </Field>
 
               <Field
@@ -288,7 +302,7 @@ export default function ReportFoundPage() {
                     className="input-field"
                   >
                     <option value="">Not sure / multiple locations</option>
-                    {(zonesData || []).map((z) => (
+                    {zones.map((z) => (
                       <option key={z.id} value={z.id}>{z.name}</option>
                     ))}
                   </select>
@@ -300,7 +314,7 @@ export default function ReportFoundPage() {
                   <input
                     type="date"
                     value={dateFound}
-                    max={new Date().toISOString().split('T')[0]}
+                    max={todayMax}
                     onChange={(e) => setDateFound(e.target.value)}
                     className="input-field"
                     required
@@ -317,6 +331,13 @@ export default function ReportFoundPage() {
               </div>
             </div>
           </div>
+
+          <FinderVerificationQuestions
+            questions={questions}
+            onChange={setQuestion}
+            onAdd={addQuestion}
+            onRemove={removeQuestion}
+          />
 
           {/* ── Safety note ── */}
           <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800

@@ -16,9 +16,11 @@ from app.core.database import Base
 
 
 class PotentialMatchStatus(str, PyEnum):
-    ACTIVE  = "active"   # Awaiting owner verification (Path A)
-    PAUSED  = "paused"   # Paused while item is UNDER_DISPUTE (Section 10.10)
-    EXPIRED = "expired"  # 14-day timeout or manual expiry (Section 8)
+    ACTIVE          = "active"          # Awaiting owner verification (Path A)
+    PENDING_REVIEW  = "pending_review"  # Score 0.50–0.75 — admin queue (Section 12.5)
+    VERIFIED        = "verified"        # Auto-approved — chat unlocked (Section 12.5)
+    PAUSED          = "paused"          # Paused while item is UNDER_DISPUTE (Section 10.10)
+    EXPIRED         = "expired"         # 14-day timeout or manual expiry (Section 21.3)
 
 
 class PotentialMatch(Base):

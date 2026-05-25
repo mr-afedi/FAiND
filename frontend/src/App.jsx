@@ -16,6 +16,9 @@ import ReportFoundPage     from './pages/ReportFoundPage'
 import LostItemsPage       from './pages/LostItemsPage'
 import FoundItemsPage      from './pages/FoundItemsPage'
 import ItemDetailPage      from './pages/ItemDetailPage'
+import ItemUnavailablePage from './pages/ItemUnavailablePage'
+import VerifyOwnershipPage from './pages/VerifyOwnershipPage'
+import MessagesPage        from './pages/MessagesPage'
 
 // Guards
 import ProtectedRoute from './components/ProtectedRoute'
@@ -72,9 +75,15 @@ export default function App() {
         <Route path="/lost"        element={<LostItemsPage />} />
         <Route path="/found"       element={<FoundItemsPage />} />
         <Route path="/items/:itemId" element={<ItemDetailPage />} />
+        <Route path="/item-unavailable" element={<ItemUnavailablePage />} />
 
-        {/* ── Future features will add routes here ── */}
-        {/* <Route path="/messages" element={<ProtectedRoute><MessagesPage /></ProtectedRoute>} /> */}
+        {/* Feature I — Path A ownership verification */}
+        <Route path="/verify-ownership/:matchId" element={
+          <ProtectedRoute><VerifyOwnershipPage /></ProtectedRoute>
+        } />
+        <Route path="/messages/:conversationId" element={
+          <ProtectedRoute><MessagesPage /></ProtectedRoute>
+        } />
 
         {/* Fallback — unmatched routes show a not-found page, never silently redirect */}
         <Route path="*" element={<NotFoundPage />} />

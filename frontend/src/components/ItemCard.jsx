@@ -4,18 +4,7 @@
  *        poster tier badge + display name → public profile.
  */
 import { Link } from 'react-router-dom'
-
-const CATEGORY_LABELS = {
-  electronics: { icon: '📱', label: 'Electronics' },
-  bag:         { icon: '🎒', label: 'Bag' },
-  id_card:     { icon: '🪪', label: 'ID / Card' },
-  keys:        { icon: '🔑', label: 'Keys' },
-  clothing:    { icon: '👕', label: 'Clothing' },
-  books_notes: { icon: '📚', label: 'Books / Notes' },
-  wallet:      { icon: '👜', label: 'Wallet' },
-  jewellery:   { icon: '💍', label: 'Jewellery' },
-  other:       { icon: '📦', label: 'Other' },
-}
+import { CategoryIcon, CategoryLabel, getCategoryMeta, MapPin } from './icons'
 
 const STATUS_PILL = {
   open:               'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
@@ -41,28 +30,31 @@ function timeAgo(iso) {
   return new Date(iso).toLocaleDateString()
 }
 
-export default function ItemCard({ item }) {
-  const cat  = CATEGORY_LABELS[item.category] ?? { icon: '📦', label: item.category }
+const VIEWER_BADGE_PILL =
+  'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-300'
+
+export default function ItemCard({ item, viewerBadge = null }) {
+  const cat  = getCategoryMeta(item.category)
   const tier = item.posted_by?.trust_tier ?? 'New Member'
 
   return (
     <Link
       to={`/items/${item.id}`}
-      className="group flex flex-col rounded-2xl overflow-hidden border border-slate-200/70
+      className="group flex h-full flex-col rounded-2xl overflow-hidden border border-slate-200/70
                  dark:border-slate-700/50 bg-white dark:bg-slate-800/60
                  hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200"
     >
-      {/* Image / category icon */}
-      <div className="relative w-full aspect-[4/3] bg-slate-100 dark:bg-slate-700 overflow-hidden">
+      {/* Image — flex-shrink-0 so grid row stretch never compresses the photo area */}
+      <div className="relative w-full flex-shrink-0 aspect-[4/3] bg-slate-100 dark:bg-slate-700 overflow-hidden">
         {item.image_urls?.[0] ? (
           <img
             src={item.image_urls[0]}
             alt={cat.label}
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+            className="w-full h-full object-contain"
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-5xl">
-            {cat.icon}
+          <div className="w-full h-full flex items-center justify-center text-slate-400">
+            <CategoryIcon category={item.category} className="w-14 h-14" />
           </div>
         )}
         {/* Item type badge top-left */}
@@ -81,28 +73,36 @@ export default function ItemCard({ item }) {
         )}
       </div>
 
-      {/* Body */}
-      <div className="flex flex-col gap-2 p-3 flex-1">
+      {/* Body — natural height; mt-auto absorbs extra space when grid rows are equalized */}
+      <div className="mt-auto flex flex-col gap-2 p-3">
         {/* Category + status */}
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">
-            {cat.icon} {cat.label}
-          </span>
-          {STATUS_PILL[item.status] && (
+          <CategoryLabel
+            category={item.category}
+            className="text-xs font-semibold text-slate-700 dark:text-slate-200 min-w-0"
+          />
+          {viewerBadge ? (
+            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-lg ${VIEWER_BADGE_PILL}`}>
+              {viewerBadge}
+            </span>
+          ) : STATUS_PILL[item.status] ? (
             <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-lg ${STATUS_PILL[item.status]}`}>
               {item.status.replace(/_/g, ' ')}
             </span>
-          )}
+          ) : null}
         </div>
 
         {/* Description preview */}
-        <p className="text-sm text-slate-700 dark:text-slate-300 line-clamp-2 leading-snug flex-1">
+        <p className="text-sm text-slate-700 dark:text-slate-300 line-clamp-2 leading-snug">
           {item.public_description}
         </p>
 
         {/* Location + time */}
         <div className="flex items-center justify-between text-xs text-slate-400 dark:text-slate-500">
-          <span className="truncate max-w-[60%]">📍 {item.location_label}</span>
+          <span className="truncate max-w-[60%] inline-flex items-center gap-1">
+            <MapPin className="w-3 h-3 shrink-0" aria-hidden />
+            {item.location_label}
+          </span>
           <span className="flex-shrink-0">{timeAgo(item.created_at)}</span>
         </div>
 

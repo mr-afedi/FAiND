@@ -11,6 +11,10 @@ import {
   markNotificationRead,
   markAllNotificationsRead,
 } from '../services/matchService'
+import { getItemDetail } from '../services/itemService'
+import { NotificationTypeIcon, Bell } from './icons'
+
+const ITEM_LINK_RE = /^\/items\/([0-9a-f-]{36})$/i
 
 function timeAgo(isoString) {
   const diff = Date.now() - new Date(isoString).getTime()
@@ -22,16 +26,73 @@ function timeAgo(isoString) {
   return `${Math.floor(hrs / 24)}d ago`
 }
 
-const TYPE_ICON = {
-  match_found: '🔍',
-  claim_received: '📩',
-  verified: '✅',
-  failed: '❌',
-  returned: '🎉',
-  dispute: '⚠️',
-  tip: '💰',
-  expiring: '⏰',
-  suspended: '🚫',
+/** Approximate two lines of text-xs in the notification panel */
+const BODY_TWO_LINE_CHARS = 100
+
+function NotificationRow({ notif, onNavigate }) {
+  const [expanded, setExpanded] = useState(false)
+  const canExpand = (notif.body?.length ?? 0) > BODY_TWO_LINE_CHARS
+
+  const handleRowClick = () => {
+    onNavigate(notif)
+  }
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={handleRowClick}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          handleRowClick()
+        }
+      }}
+      className={`w-full text-left px-4 py-3 flex gap-3 items-start cursor-pointer
+                  hover:bg-slate-50 dark:hover:bg-slate-800/60
+                  transition-colors duration-100
+                  ${!notif.read ? 'bg-blue-50/60 dark:bg-blue-900/10' : ''}`}
+    >
+      <span className="mt-0.5 flex-shrink-0 text-slate-500 dark:text-slate-400">
+        <NotificationTypeIcon type={notif.notification_type} />
+      </span>
+      <div className="flex-1 min-w-0">
+        <p
+          className={`text-sm leading-snug break-words
+                      ${notif.read
+                        ? 'text-slate-700 dark:text-slate-300'
+                        : 'font-semibold text-slate-900 dark:text-white'}`}
+        >
+          {notif.title}
+        </p>
+        <p
+          className={`text-xs text-slate-500 dark:text-slate-400 mt-0.5 break-words
+                      ${expanded ? '' : 'line-clamp-2'}`}
+        >
+          {notif.body}
+        </p>
+        {canExpand && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              setExpanded((v) => !v)
+            }}
+            className="text-xs font-medium text-blue-600 dark:text-blue-400
+                       hover:underline mt-1"
+          >
+            {expanded ? 'Show less' : 'Read more'}
+          </button>
+        )}
+        <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
+          {timeAgo(notif.created_at)}
+        </p>
+      </div>
+      {!notif.read && (
+        <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0 mt-1.5" />
+      )}
+    </div>
+  )
 }
 
 export default function NotificationDropdown() {
@@ -41,7 +102,6 @@ export default function NotificationDropdown() {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
 
-  // Close on outside click
   useEffect(() => {
     const handler = (e) => {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false)
@@ -58,7 +118,7 @@ export default function NotificationDropdown() {
     refetchInterval: 60_000,
   })
 
-  const { data: listData } = useQuery({
+  const { data: listData, isLoading } = useQuery({
     queryKey: ['notifications-list'],
     queryFn: () => getMyNotifications({ limit: 20 }),
     enabled: isAuthenticated && open,
@@ -84,10 +144,23 @@ export default function NotificationDropdown() {
     },
   })
 
-  const handleNotificationClick = (notif) => {
+  const handleNotificationClick = async (notif) => {
     if (!notif.read) markReadMutation.mutate(notif.id)
     setOpen(false)
-    if (notif.link) navigate(notif.link)
+    if (!notif.link) return
+
+    const itemLink = notif.link.match(ITEM_LINK_RE)
+    if (itemLink) {
+      try {
+        await getItemDetail(itemLink[1])
+        navigate(notif.link)
+      } catch {
+        navigate('/item-unavailable')
+      }
+      return
+    }
+
+    navigate(notif.link)
   }
 
   if (!isAuthenticated) return null
@@ -101,34 +174,25 @@ export default function NotificationDropdown() {
                    transition-colors duration-150"
         aria-label="Notifications"
       >
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
-        </svg>
+        <Bell className="w-5 h-5" strokeWidth={1.5} aria-hidden />
         {unreadCount > 0 && (
-          <span className="absolute top-1 right-1 min-w-[16px] h-4 px-1
-                           bg-red-500 text-white text-[9px] font-bold rounded-full
-                           flex items-center justify-center leading-none">
+          <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1
+                           bg-red-500 text-white text-[10px] font-bold
+                           rounded-full flex items-center justify-center leading-none">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-2 w-80 bg-white dark:bg-gray-900
-                        border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl
-                        z-50 overflow-hidden animate-fade-in">
-          {/* Header */}
+        <div
+          className="absolute right-0 mt-2 w-80 sm:w-96 max-h-[70vh] overflow-hidden
+                     rounded-2xl border border-slate-200/80 dark:border-slate-700/60
+                     bg-white dark:bg-slate-900 shadow-xl z-50 flex flex-col"
+        >
           <div className="flex items-center justify-between px-4 py-3
                           border-b border-slate-100 dark:border-slate-800">
-            <h3 className="text-sm font-semibold text-slate-800 dark:text-white">
-              Notifications
-              {unreadCount > 0 && (
-                <span className="ml-2 text-xs bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400
-                                 px-1.5 py-0.5 rounded-full font-bold">
-                  {unreadCount} new
-                </span>
-              )}
-            </h3>
+            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">Notifications</h3>
             {unreadCount > 0 && (
               <button
                 onClick={() => markAllMutation.mutate()}
@@ -139,51 +203,27 @@ export default function NotificationDropdown() {
             )}
           </div>
 
-          {/* List */}
-          <div className="max-h-96 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
-            {notifications.length === 0 ? (
-              <div className="py-10 text-center">
-                <p className="text-2xl mb-2">🔔</p>
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  No notifications yet
-                </p>
+          <div className="overflow-y-auto flex-1">
+            {isLoading ? (
+              <div className="flex justify-center py-10">
+                <div className="w-6 h-6 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : notifications.length === 0 ? (
+              <div className="py-10 text-center text-sm text-slate-400">
+                <Bell className="w-8 h-8 mx-auto mb-2 opacity-50" aria-hidden />
+                No notifications yet
               </div>
             ) : (
               notifications.map((notif) => (
-                <button
+                <NotificationRow
                   key={notif.id}
-                  onClick={() => handleNotificationClick(notif)}
-                  className={`w-full text-left px-4 py-3 flex gap-3 items-start
-                              hover:bg-slate-50 dark:hover:bg-slate-800/60
-                              transition-colors duration-100
-                              ${!notif.read ? 'bg-blue-50/60 dark:bg-blue-900/10' : ''}`}
-                >
-                  <span className="text-lg mt-0.5 flex-shrink-0">
-                    {TYPE_ICON[notif.notification_type] || '🔔'}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <p className={`text-sm leading-tight truncate
-                                  ${notif.read
-                                    ? 'text-slate-700 dark:text-slate-300'
-                                    : 'font-semibold text-slate-900 dark:text-white'}`}>
-                      {notif.title}
-                    </p>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">
-                      {notif.body}
-                    </p>
-                    <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
-                      {timeAgo(notif.created_at)}
-                    </p>
-                  </div>
-                  {!notif.read && (
-                    <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0 mt-1.5" />
-                  )}
-                </button>
+                  notif={notif}
+                  onNavigate={handleNotificationClick}
+                />
               ))
             )}
           </div>
 
-          {/* Footer */}
           <div className="border-t border-slate-100 dark:border-slate-800 px-4 py-2.5">
             <button
               onClick={() => { setOpen(false); navigate('/dashboard?tab=pending') }}
@@ -193,6 +233,10 @@ export default function NotificationDropdown() {
             </button>
           </div>
         </div>
+      )}
+
+      {open && (
+        <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden />
       )}
     </div>
   )

@@ -14,6 +14,8 @@ from app.api.items import router as items_router
 from app.api.matches import router as matches_router
 from app.api.notifications import router as notifications_router
 from app.api.push import router as push_router
+from app.api.verification import router as verification_router
+from app.core.scheduler import scheduler_lifespan
 
 settings = get_settings()
 
@@ -25,6 +27,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs" if settings.DEBUG else None,
     redoc_url="/redoc" if settings.DEBUG else None,
+    lifespan=scheduler_lifespan,
 )
 
 # Rate limiting
@@ -49,6 +52,7 @@ app.include_router(items_router, prefix="/api/v1")
 app.include_router(matches_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(push_router, prefix="/api/v1")
+app.include_router(verification_router, prefix="/api/v1")
 
 
 @app.get("/health")

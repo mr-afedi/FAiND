@@ -33,7 +33,7 @@ class HiddenQuestionInput(BaseModel):
 
 
 class HiddenQuestionPublic(BaseModel):
-    """Questions are shown to the owner during verification; answers are NEVER returned."""
+    """Finder's questions shown to the owner during verification; answers are NEVER returned."""
     id: uuid.UUID
     position: int
     question: str  # decrypted question text, only sent to the item owner
@@ -50,7 +50,6 @@ class CreateLostItemRequest(BaseModel):
     location_id: Optional[uuid.UUID] = None
     date_occurred: datetime
     image_urls: list[str] = []
-    hidden_questions: list[HiddenQuestionInput]
 
     @field_validator("public_description")
     @classmethod
@@ -80,15 +79,6 @@ class CreateLostItemRequest(BaseModel):
         for url in v:
             if not ("cloudinary.com" in url or "res.cloudinary.com" in url):
                 raise ValueError(f"Invalid image URL — only Cloudinary URLs are accepted")
-        return v
-
-    @field_validator("hidden_questions")
-    @classmethod
-    def validate_questions(cls, v: list[HiddenQuestionInput]) -> list[HiddenQuestionInput]:
-        if len(v) < 2:
-            raise ValueError("At least 2 hidden verification questions are required")
-        if len(v) > 3:
-            raise ValueError("Maximum 3 hidden verification questions allowed")
         return v
 
 
@@ -157,8 +147,7 @@ class LostItemPublicResponse(BaseModel):
 
 
 class LostItemOwnerResponse(LostItemPublicResponse):
-    """Extended response returned ONLY to the item's owner."""
-    hidden_questions: list[HiddenQuestionPublic] = []
+    """Extended response returned ONLY to the item's owner (V4.2: no hidden Q&A on lost items)."""
 
     model_config = {"from_attributes": True}
 
@@ -196,14 +185,15 @@ class CampusZoneOption(BaseModel):
 
 class CreateFoundItemRequest(BaseModel):
     """
-    Found items have no private description and no hidden questions.
-    At least one image is mandatory (Section 7).
+    Found items: finder sets hidden verification Q&A (Section 7, V4.2).
+    At least one image is mandatory.
     """
     category: ItemCategory
     public_description: str
     location_id: Optional[uuid.UUID] = None
     date_occurred: datetime
     image_urls: list[str]  # min 1 required, max 2
+    hidden_questions: list[HiddenQuestionInput]
 
     @field_validator("public_description")
     @classmethod
@@ -225,6 +215,15 @@ class CreateFoundItemRequest(BaseModel):
         for url in v:
             if not ("cloudinary.com" in url or "res.cloudinary.com" in url):
                 raise ValueError("Invalid image URL — only Cloudinary URLs are accepted")
+        return v
+
+    @field_validator("hidden_questions")
+    @classmethod
+    def validate_questions(cls, v: list[HiddenQuestionInput]) -> list[HiddenQuestionInput]:
+        if len(v) < 2:
+            raise ValueError("At least 2 hidden verification questions are required")
+        if len(v) > 3:
+            raise ValueError("Maximum 3 hidden verification questions allowed")
         return v
 
 
@@ -261,9 +260,9 @@ class UpdateFoundItemRequest(BaseModel):
         return v
 
 
-# Found items share the same public response shape; no hidden fields to add for owner
+# Found items: hidden Q&A never exposed in any API response (Section 7.2)
 FoundItemPublicResponse = LostItemPublicResponse
-FoundItemOwnerResponse  = LostItemPublicResponse   # found items have no encrypted owner-only data
+FoundItemOwnerResponse = LostItemPublicResponse
 
 class FoundItemListItem(BaseModel):
     """Lightweight row for dashboard listing."""

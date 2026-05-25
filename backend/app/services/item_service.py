@@ -13,6 +13,7 @@ from app.models.campus_zone import CampusZone
 from app.models.user import User, AccountStatus
 from app.models.potential_match import PotentialMatch, PotentialMatchStatus
 import app.services.trust_service as trust_service
+import app.services.matching_service as matching_service
 from app.schemas.item import (
     CreateLostItemRequest,
     UpdateLostItemRequest,
@@ -20,7 +21,6 @@ from app.schemas.item import (
     LostItemListResponse,
     LostItemPublicResponse,
     LostItemOwnerResponse,
-    HiddenQuestionPublic,
     ItemPosterSummary,
     CreateFoundItemRequest,
     UpdateFoundItemRequest,
@@ -32,7 +32,7 @@ from app.schemas.item import (
     RecentlyReturnedItem,
     HomepageResponse,
 )
-from app.utils.encryption import encrypt, decrypt
+from app.utils.encryption import encrypt
 
 # Lost items are active for 45 days (Section 21.1)
 _LOST_ITEM_ACTIVE_DAYS = 45
@@ -62,15 +62,6 @@ def _build_owner_response(
     db: Session,
     override_status: Optional[ItemStatus] = None,
 ) -> LostItemOwnerResponse:
-    questions = []
-    for q in item.hidden_questions:
-        questions.append(
-            HiddenQuestionPublic(
-                id=q.id,
-                position=q.position,
-                question=decrypt(q.question),
-            )
-        )
     poster = ItemPosterSummary(
         id=item.posted_by.id,
         display_name=item.posted_by.full_name,
@@ -92,7 +83,6 @@ def _build_owner_response(
         extensions_used=item.extensions_used,
         created_at=item.created_at,
         posted_by=poster,
-        hidden_questions=questions,
     )
 
 
@@ -107,14 +97,22 @@ def _build_public_response(
         username=item.posted_by.username,
         trust_tier=trust_service.get_trust_tier(item.posted_by.trust_score),
     )
-    # Section 10 — match details are private to the two parties involved.
-    # show_as_matched=True  → party viewer, always show POTENTIAL_MATCH badge
-    # mask_match_status=True → non-party viewer, mask POTENTIAL_MATCH as OPEN
-    # neither flag          → show DB status as-is
+    # Section 10 — match/verification statuses are private; only owners see them on their post.
+    # show_as_matched=True  → party viewer sees POTENTIAL_MATCH (not under_verification)
+    # mask_match_status=True → non-party sees normal open/found feed status
     if show_as_matched:
         visible_status = ItemStatus.POTENTIAL_MATCH
-    elif mask_match_status and item.status == ItemStatus.POTENTIAL_MATCH:
-        visible_status = ItemStatus.OPEN
+    elif mask_match_status and item.status in (
+        ItemStatus.POTENTIAL_MATCH,
+        ItemStatus.UNDER_VERIFICATION,
+    ):
+        visible_status = (
+            ItemStatus.OPEN if item.item_type == ItemType.LOST else ItemStatus.FOUND
+        )
+    elif item.status == ItemStatus.UNDER_VERIFICATION:
+        visible_status = (
+            ItemStatus.OPEN if item.item_type == ItemType.LOST else ItemStatus.FOUND
+        )
     else:
         visible_status = item.status
     return LostItemPublicResponse(
@@ -178,27 +176,12 @@ def create_lost_item(
         expiry_date=expiry,
     )
     db.add(item)
-    db.flush()  # get item.id before inserting questions
-
-    for idx, q in enumerate(payload.hidden_questions, start=1):
-        hq = ItemHiddenQuestion(
-            item_id=item.id,
-            question=encrypt(q.question),
-            answer=encrypt(q.answer),
-            position=idx,
-        )
-        db.add(hq)
-
     db.commit()
     db.refresh(item)
 
-    # Eagerly load relationships for response building
     item = (
         db.query(Item)
-        .options(
-            joinedload(Item.posted_by),
-            joinedload(Item.hidden_questions),
-        )
+        .options(joinedload(Item.posted_by))
         .filter(Item.id == item.id)
         .one()
     )
@@ -228,8 +211,8 @@ def get_item_detail(
 
     is_owner = current_user and item.posted_by_id == current_user.id
 
-    # Archived items are private (Section 21.5) — only the owner may view
-    if item.status == ItemStatus.ARCHIVED and not is_owner:
+    # Archived items are hidden from the entire app (Section 21.5)
+    if item.status == ItemStatus.ARCHIVED:
         raise LookupError("Item not found")
 
     # Look up any active match involving this item — used for both owner and
@@ -380,7 +363,7 @@ def delete_lost_item(
         raise ValueError("Items under dispute or already returned cannot be removed")
 
     item.status = ItemStatus.ARCHIVED
-    db.commit()
+    matching_service.cleanup_on_item_archive(db, item.id)
 
 
 # ── Extend ────────────────────────────────────────────────────────────────────
@@ -470,11 +453,23 @@ def create_found_item(
         expiry_date=expiry,
     )
     db.add(item)
+    db.flush()
+
+    for idx, q in enumerate(payload.hidden_questions, start=1):
+        db.add(
+            ItemHiddenQuestion(
+                item_id=item.id,
+                question=encrypt(q.question),
+                answer=encrypt(q.answer),
+                position=idx,
+            )
+        )
+
     db.commit()
 
     item = (
         db.query(Item)
-        .options(joinedload(Item.posted_by), joinedload(Item.hidden_questions))
+        .options(joinedload(Item.posted_by))
         .filter(Item.id == item.id)
         .one()
     )
@@ -591,7 +586,7 @@ def delete_found_item(
         raise ValueError("Items under dispute or already returned cannot be removed")
 
     item.status = ItemStatus.ARCHIVED
-    db.commit()
+    matching_service.cleanup_on_item_archive(db, item.id)
 
 
 def extend_found_item(
@@ -658,9 +653,10 @@ def _build_browse_card(
     is_party = bool(viewer_matched_ids and item.id in viewer_matched_ids)
     if is_party:
         public_status = ItemStatus.POTENTIAL_MATCH
-    elif item.status == ItemStatus.POTENTIAL_MATCH:
-        # Non-party viewing a lost item that has a match — mask it back to OPEN
-        public_status = ItemStatus.OPEN
+    elif item.status in (ItemStatus.POTENTIAL_MATCH, ItemStatus.UNDER_VERIFICATION):
+        public_status = (
+            ItemStatus.OPEN if item.item_type == ItemType.LOST else ItemStatus.FOUND
+        )
     else:
         public_status = item.status
     return BrowseItemCard(

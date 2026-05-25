@@ -11,7 +11,9 @@ from app.core.deps import get_current_user
 from app.core.config import get_settings
 from app.models.user import User
 from app.models.item import Item
-from app.models.potential_match import PotentialMatch
+from app.models.potential_match import PotentialMatch, PotentialMatchStatus
+from app.models.conversation import Conversation, ConversationStatus
+from app.models.verification_attempt import VerificationAttempt
 from app.schemas.match import (
     PotentialMatchResponse,
     PotentialMatchListResponse,
@@ -38,10 +40,24 @@ def _item_summary(item: Item) -> MatchItemSummary:
     )
 
 
-def _build_match_response(match: PotentialMatch, user_id: uuid.UUID) -> PotentialMatchResponse:
+def _build_match_response(
+    match: PotentialMatch,
+    user_id: uuid.UUID,
+    db: Session,
+    *,
+    has_verification_attempt: bool = False,
+) -> PotentialMatchResponse:
     lost = match.lost_item
     found = match.found_item
     role = "lost_owner" if lost.posted_by_id == user_id else "found_owner"
+    conv = (
+        db.query(Conversation)
+        .filter(
+            Conversation.potential_match_id == match.id,
+            Conversation.status == ConversationStatus.UNLOCKED,
+        )
+        .first()
+    )
     return PotentialMatchResponse(
         id=match.id,
         match_score=match.match_score,
@@ -51,6 +67,8 @@ def _build_match_response(match: PotentialMatch, user_id: uuid.UUID) -> Potentia
         lost_item=_item_summary(lost),
         found_item=_item_summary(found),
         user_role=role,
+        conversation_id=conv.id if conv else None,
+        has_verification_attempt=has_verification_attempt,
     )
 
 
@@ -61,7 +79,25 @@ def get_my_matches(
 ):
     """Return all active potential matches involving the current user."""
     rows = matching_service.list_matches_for_user(db, current_user.id)
-    matches = [_build_match_response(m, current_user.id) for m in rows]
+    match_ids = [m.id for m in rows]
+    attempted_ids: set[uuid.UUID] = set()
+    if match_ids:
+        attempted_ids = {
+            row[0]
+            for row in db.query(VerificationAttempt.potential_match_id)
+            .filter(VerificationAttempt.potential_match_id.in_(match_ids))
+            .distinct()
+            .all()
+        }
+    matches = [
+        _build_match_response(
+            m,
+            current_user.id,
+            db,
+            has_verification_attempt=m.id in attempted_ids,
+        )
+        for m in rows
+    ]
     return PotentialMatchListResponse(matches=matches, total=len(matches))
 
 

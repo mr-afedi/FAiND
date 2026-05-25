@@ -97,6 +97,99 @@ def notify_match_found(
     _fire_push(db, user_id=found_owner_id, title="FAiND", body=found_body, url=found_link)
 
 
+def notify_verification_passed(
+    db: Session,
+    lost_owner_id: uuid.UUID,
+    found_owner_id: uuid.UUID,
+    match_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    lost_item_id: uuid.UUID,
+    found_item_id: uuid.UUID,
+) -> None:
+    """Section 11.1 — verification passed: both parties notified, chat unlocked."""
+    lost_body = "Your ownership verification passed. You can now chat with the finder."
+    found_body = "The lost item owner verified ownership. Chat is now unlocked."
+    lost_link = f"/messages/{conversation_id}"
+    found_link = f"/messages/{conversation_id}"
+
+    create_notification(
+        db, lost_owner_id, NotificationType.VERIFICATION_PASSED,
+        title="Verification passed!",
+        body=lost_body, link=lost_link, reference_id=match_id,
+    )
+    create_notification(
+        db, found_owner_id, NotificationType.VERIFICATION_PASSED,
+        title="Chat unlocked!",
+        body=found_body, link=found_link, reference_id=match_id,
+    )
+    db.flush()
+    _fire_push(db, lost_owner_id, "FAiND", lost_body, lost_link)
+    _fire_push(db, found_owner_id, "FAiND", found_body, found_link)
+
+
+def notify_verification_failed(
+    db: Session,
+    user_id: uuid.UUID,
+    match_id: uuid.UUID,
+    lost_item_id: uuid.UUID,
+    attempts_remaining: int,
+) -> None:
+    """Section 11.1 — verification failed: claimant only."""
+    body = (
+        f"Your verification answers did not match. "
+        f"{attempts_remaining} attempt(s) remaining in the next 24 hours."
+    )
+    link = f"/verify-ownership/{match_id}"
+    create_notification(
+        db, user_id, NotificationType.VERIFICATION_FAILED,
+        title="Verification failed",
+        body=body, link=link, reference_id=match_id,
+    )
+    db.flush()
+    _fire_push(db, user_id, "FAiND", body, link)
+
+
+def notify_verification_review(
+    db: Session,
+    user_id: uuid.UUID,
+    match_id: uuid.UUID,
+    lost_item_id: uuid.UUID,
+) -> None:
+    """Section 11.1 — sent to admin review: claimant only."""
+    body = (
+        "Your verification score is in the review range. "
+        "An admin will review your answers — we'll notify you when decided."
+    )
+    link = f"/items/{lost_item_id}"
+    create_notification(
+        db, user_id, NotificationType.VERIFICATION_REVIEW,
+        title="Verification under review",
+        body=body, link=link, reference_id=match_id,
+    )
+    db.flush()
+    _fire_push(db, user_id, "FAiND", body, link)
+
+
+def notify_potential_match_expired(
+    db: Session,
+    owner_id: uuid.UUID,
+    lost_item_id: uuid.UUID,
+    match_id: uuid.UUID,
+) -> None:
+    """Section 11.1 / 21.3 — POTENTIAL_MATCH expired after 14 days."""
+    body = (
+        "Your potential match has expired. Your item is back in the active pool."
+    )
+    link = f"/items/{lost_item_id}"
+    create_notification(
+        db, owner_id, NotificationType.POTENTIAL_MATCH_EXPIRED,
+        title="Potential match expired",
+        body=body, link=link, reference_id=match_id,
+    )
+    db.flush()
+    _fire_push(db, owner_id, "FAiND", body, link)
+
+
 def get_unread_count(db: Session, user_id: uuid.UUID) -> int:
     return (
         db.query(Notification)

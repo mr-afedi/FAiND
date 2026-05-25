@@ -31,8 +31,9 @@ class PotentialMatchResponse(BaseModel):
     created_at: datetime
     lost_item: MatchItemSummary
     found_item: MatchItemSummary
-    # Which side the current user is on
     user_role: str  # "lost_owner" | "found_owner"
+    conversation_id: Optional[uuid.UUID] = None
+    has_verification_attempt: bool = False
 
     model_config = {"from_attributes": True}
 

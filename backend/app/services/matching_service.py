@@ -5,7 +5,7 @@ Runs after every lost/found item post (via FastAPI BackgroundTask).
 Compares the new item against all active opposing items in the same university.
 
 Score formula (Section 10.1):
-  Description 0.40 | Image 0.15 | Location 0.15 | Date 0.15 | Category 0.15
+  Description 0.45 | Image 0.15 | Location 0.125 | Date 0.125 | Category 0.15
   Image weight redistributes when either item has no image.
 
 Threshold: >= 0.60 → PotentialMatch + notify both users; lost item → POTENTIAL_MATCH.
@@ -24,22 +24,25 @@ import httpx
 import numpy as np
 from geopy.distance import geodesic
 from sqlalchemy import or_
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, aliased
 
-from app.models.item import Item, ItemType, ItemStatus
+from app.models.item import Item, ItemCategory, ItemType, ItemStatus
 from app.models.user import User, AccountStatus
 from app.models.potential_match import PotentialMatch, PotentialMatchStatus
+from app.models.conversation import Conversation, ConversationStatus
+from app.models.verification_attempt import VerificationAttempt, VerificationResult
 from app.services import notification_service
 
 logger = logging.getLogger(__name__)
 
 MATCH_THRESHOLD = 0.60
+_MIN_DESCRIPTION_SIMILARITY = 0.35
 
 # Base weights (Section 10.1)
-_W_DESC = 0.40
+_W_DESC = 0.45
 _W_IMG = 0.15
-_W_LOC = 0.15
-_W_DATE = 0.15
+_W_LOC = 0.125
+_W_DATE = 0.125
 _W_CAT = 0.15
 
 # Items eligible in the matching pool (Section 10.8)
@@ -184,6 +187,40 @@ def category_match_score(cat_a, cat_b) -> float:
     return 1.0 if cat_a == cat_b else 0.0
 
 
+def _is_category_hard_blocked(cat_a: ItemCategory, cat_b: ItemCategory) -> bool:
+    """
+    Different categories disqualify the pair unless either item is Other.
+    """
+    if cat_a == cat_b:
+        return False
+    if cat_a == ItemCategory.OTHER or cat_b == ItemCategory.OTHER:
+        return False
+    return True
+
+
+def _disqualified_breakdown(reason: str, **fields: float) -> dict:
+    """Score breakdown for pairs that fail pre-threshold gates."""
+    breakdown = {
+        "description": 0.0,
+        "image": 0.0,
+        "location": 0.0,
+        "date": 0.0,
+        "category": 0.0,
+        "total": 0.0,
+        "weights": {
+            "description": _W_DESC,
+            "image": _W_IMG,
+            "location": _W_LOC,
+            "date": _W_DATE,
+            "category": _W_CAT,
+        },
+        "disqualified": reason,
+    }
+    for key, value in fields.items():
+        breakdown[key] = value
+    return breakdown
+
+
 # ── Combined score (Section 10.1) ─────────────────────────────────────────────
 
 def compute_match_score(item_a: Item, item_b: Item) -> tuple[float, dict]:
@@ -191,7 +228,15 @@ def compute_match_score(item_a: Item, item_b: Item) -> tuple[float, dict]:
     Returns (total_score, breakdown_dict).
     Public descriptions only — private descriptions never used (Section 10.2).
     """
+    if _is_category_hard_blocked(item_a.category, item_b.category):
+        return 0.0, _disqualified_breakdown("category_mismatch", category=0.0)
+
     desc = description_similarity(item_a.public_description, item_b.public_description)
+    if desc < _MIN_DESCRIPTION_SIMILARITY:
+        return 0.0, _disqualified_breakdown(
+            "description_below_minimum",
+            description=round(float(desc), 4),
+        )
 
     has_img_a = bool(item_a.image_urls)
     has_img_b = bool(item_b.image_urls)
@@ -215,6 +260,16 @@ def compute_match_score(item_a: Item, item_b: Item) -> tuple[float, dict]:
     )
     date = date_proximity_score(item_a.date_occurred, item_b.date_occurred)
     cat = category_match_score(item_a.category, item_b.category)
+
+    # False positive guard: perfect location + date but description below 0.60
+    # (typical pattern: desc < 0.55 with loc/date 1.0 — different items, same place/day)
+    if loc == 1.0 and date == 1.0 and desc < 0.60:
+        return 0.0, _disqualified_breakdown(
+            "description_too_weak_for_perfect_location_date",
+            description=round(float(desc), 4),
+            location=round(float(loc), 4),
+            date=round(float(date), 4),
+        )
 
     total = w_desc * desc + w_img * img + w_loc * loc + w_date * date + w_cat * cat
     total = max(0.0, min(1.0, float(total)))
@@ -360,9 +415,15 @@ def run_matching_for_item(db: Session, item_id: uuid.UUID) -> list[PotentialMatc
 
         score, breakdown = compute_match_score(lost_item, found_item)
         w = breakdown.get("weights", {})
-        matched = score >= MATCH_THRESHOLD
+        disqualified = breakdown.get("disqualified")
+        matched = not disqualified and score >= MATCH_THRESHOLD
 
-        decision = "✅ PotentialMatch CREATED" if matched else "❌ Below threshold — skipped"
+        if disqualified:
+            decision = f"❌ Disqualified — {disqualified}"
+        elif matched:
+            decision = "✅ PotentialMatch CREATED"
+        else:
+            decision = "❌ Below threshold — skipped"
         print(
             f"\n┌─ Comparing ──────────────────────────────────────────────────"
             f"\n│  Lost  : {lost_item.id}  [{lost_item.category.value}]"
@@ -413,6 +474,112 @@ def run_matching_background(item_id: uuid.UUID) -> None:
         db.rollback()
     finally:
         db.close()
+
+
+# Match statuses cancelled when an item is archived (Section 21.5)
+_LIVE_MATCH_STATUSES = [
+    PotentialMatchStatus.ACTIVE,
+    PotentialMatchStatus.PENDING_REVIEW,
+    PotentialMatchStatus.PAUSED,
+    PotentialMatchStatus.VERIFIED,
+]
+
+_REVERTABLE_ITEM_STATUSES = (
+    ItemStatus.POTENTIAL_MATCH,
+    ItemStatus.UNDER_VERIFICATION,
+)
+
+
+def _revert_item_to_active_pool(item: Item) -> None:
+    """Restore the surviving item to the public feed after its pair is archived."""
+    if item.status not in _REVERTABLE_ITEM_STATUSES:
+        return
+    item.status = (
+        ItemStatus.OPEN if item.item_type == ItemType.LOST else ItemStatus.FOUND
+    )
+
+
+def _expire_matches_for_archived_item(db: Session, item_id: uuid.UUID) -> list[PotentialMatch]:
+    """
+    Expire all live PotentialMatch rows for this item and revert the surviving peer.
+    Path B/C claims use PENDING_REVIEW matches until dedicated claim tables exist.
+    Does not commit — caller must commit.
+    """
+    matches = (
+        db.query(PotentialMatch)
+        .options(
+            joinedload(PotentialMatch.lost_item),
+            joinedload(PotentialMatch.found_item),
+        )
+        .filter(
+            PotentialMatch.status.in_(_LIVE_MATCH_STATUSES),
+            or_(
+                PotentialMatch.lost_item_id == item_id,
+                PotentialMatch.found_item_id == item_id,
+            ),
+        )
+        .all()
+    )
+    for match in matches:
+        match.status = PotentialMatchStatus.EXPIRED
+        for paired in (match.lost_item, match.found_item):
+            if paired.id != item_id:
+                _revert_item_to_active_pool(paired)
+
+        conv = (
+            db.query(Conversation)
+            .filter(Conversation.potential_match_id == match.id)
+            .first()
+        )
+        if conv and conv.status != ConversationStatus.FROZEN:
+            conv.status = ConversationStatus.FROZEN
+
+    return matches
+
+
+def _cancel_active_verifications_for_item(db: Session, item_id: uuid.UUID) -> int:
+    """
+    Cancel in-flight verifications: admin-review (REVIEW) attempts for this item.
+    Covers Path A/B/C — Path B/C enums exist; claim rows are not separate yet.
+    Does not commit — caller must commit.
+    """
+    attempts = (
+        db.query(VerificationAttempt)
+        .filter(
+            VerificationAttempt.result == VerificationResult.REVIEW,
+            or_(
+                VerificationAttempt.lost_item_id == item_id,
+                VerificationAttempt.found_item_id == item_id,
+            ),
+        )
+        .all()
+    )
+    for attempt in attempts:
+        attempt.result = VerificationResult.REJECTED
+    return len(attempts)
+
+
+def cleanup_on_item_archive(db: Session, item_id: uuid.UUID) -> tuple[int, int]:
+    """
+    Full archive side-effects (Section 21.5): expire matches, cancel pending
+    verifications, freeze chats. Single commit at end.
+    """
+    expired_matches = _expire_matches_for_archived_item(db, item_id)
+    cancelled_attempts = _cancel_active_verifications_for_item(db, item_id)
+    db.commit()
+    logger.info(
+        "cleanup_on_item_archive: item=%s expired_matches=%d cancelled_verifications=%d",
+        item_id,
+        len(expired_matches),
+        cancelled_attempts,
+    )
+    return len(expired_matches), cancelled_attempts
+
+
+def expire_matches_for_archived_item(db: Session, item_id: uuid.UUID) -> int:
+    """Backward-compatible wrapper — prefer cleanup_on_item_archive from delete flows."""
+    count, _ = cleanup_on_item_archive(db, item_id)
+    return count
 
 
 # ── Dispute helpers (Section 10.10) ──────────────────────────────────────────
@@ -467,6 +634,40 @@ def resume_matches_for_item(db: Session, item_id: uuid.UUID) -> int:
 
 # ── Read helpers ──────────────────────────────────────────────────────────────
 
+def _live_matches_for_user_query(db: Session, user_id: uuid.UUID):
+    """PotentialMatches involving the user's items; excludes archived items."""
+    my_item_ids = [
+        row[0]
+        for row in db.query(Item.id).filter(
+            Item.posted_by_id == user_id,
+            Item.status != ItemStatus.ARCHIVED,
+        ).all()
+    ]
+    if not my_item_ids:
+        return None
+
+    LostItem = aliased(Item)
+    FoundItem = aliased(Item)
+    return (
+        db.query(PotentialMatch)
+        .options(
+            joinedload(PotentialMatch.lost_item).joinedload(Item.posted_by),
+            joinedload(PotentialMatch.found_item).joinedload(Item.posted_by),
+        )
+        .join(LostItem, PotentialMatch.lost_item_id == LostItem.id)
+        .join(FoundItem, PotentialMatch.found_item_id == FoundItem.id)
+        .filter(
+            PotentialMatch.status.in_(_LIVE_MATCH_STATUSES),
+            LostItem.status != ItemStatus.ARCHIVED,
+            FoundItem.status != ItemStatus.ARCHIVED,
+            or_(
+                PotentialMatch.lost_item_id.in_(my_item_ids),
+                PotentialMatch.found_item_id.in_(my_item_ids),
+            ),
+        )
+    )
+
+
 def get_matched_item_ids(db: Session, user_id: uuid.UUID) -> set[uuid.UUID]:
     """
     Return ALL item IDs (own + opposing) that are part of an active/paused
@@ -474,57 +675,21 @@ def get_matched_item_ids(db: Session, user_id: uuid.UUID) -> set[uuid.UUID]:
     can see the real POTENTIAL_MATCH status on both their own item and the
     opposing item they are matched with.
     """
-    my_item_ids = [
-        row[0] for row in db.query(Item.id).filter(Item.posted_by_id == user_id).all()
-    ]
-    if not my_item_ids:
+    q = _live_matches_for_user_query(db, user_id)
+    if q is None:
         return set()
 
-    matches = (
-        db.query(PotentialMatch.lost_item_id, PotentialMatch.found_item_id)
-        .filter(
-            PotentialMatch.status.in_([
-                PotentialMatchStatus.ACTIVE,
-                PotentialMatchStatus.PAUSED,
-            ]),
-            or_(
-                PotentialMatch.lost_item_id.in_(my_item_ids),
-                PotentialMatch.found_item_id.in_(my_item_ids),
-            ),
-        )
-        .all()
-    )
     result: set[uuid.UUID] = set()
-    for lost_id, found_id in matches:
-        result.add(lost_id)
-        result.add(found_id)
+    for match in q.all():
+        result.add(match.lost_item_id)
+        result.add(match.found_item_id)
     return result
 
 
 def list_matches_for_user(db: Session, user_id: uuid.UUID) -> list[PotentialMatch]:
-    """All active/paused matches where the user owns the lost or found item."""
-    my_item_ids = [
-        row[0] for row in db.query(Item.id).filter(Item.posted_by_id == user_id).all()
-    ]
-    if not my_item_ids:
+    """All live matches where the user owns the lost or found item (archived excluded)."""
+    q = _live_matches_for_user_query(db, user_id)
+    if q is None:
         return []
 
-    return (
-        db.query(PotentialMatch)
-        .options(
-            joinedload(PotentialMatch.lost_item).joinedload(Item.posted_by),
-            joinedload(PotentialMatch.found_item).joinedload(Item.posted_by),
-        )
-        .filter(
-            PotentialMatch.status.in_([
-                PotentialMatchStatus.ACTIVE,
-                PotentialMatchStatus.PAUSED,
-            ]),
-            or_(
-                PotentialMatch.lost_item_id.in_(my_item_ids),
-                PotentialMatch.found_item_id.in_(my_item_ids),
-            ),
-        )
-        .order_by(PotentialMatch.match_score.desc())
-        .all()
-    )
+    return q.order_by(PotentialMatch.match_score.desc()).all()

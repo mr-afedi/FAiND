@@ -9,6 +9,8 @@ from app.models.trust_event import TrustEvent, TrustEventReason
 from app.models.potential_match import PotentialMatch, PotentialMatchStatus
 from app.models.notification import Notification, NotificationType
 from app.models.push_subscription import PushSubscription
+from app.models.verification_attempt import VerificationAttempt, VerificationPath, VerificationResult
+from app.models.conversation import Conversation, ConversationStatus
 
 __all__ = [
     "University",
@@ -29,4 +31,9 @@ __all__ = [
     "Notification",
     "NotificationType",
     "PushSubscription",
+    "VerificationAttempt",
+    "VerificationPath",
+    "VerificationResult",
+    "Conversation",
+    "ConversationStatus",
 ]

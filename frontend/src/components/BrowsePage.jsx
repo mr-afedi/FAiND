@@ -14,19 +14,16 @@ import { useQuery } from '@tanstack/react-query'
 import NavBar from './NavBar'
 import ItemCard from './ItemCard'
 import { browseItems, getPublicCampusZones } from '../services/itemService'
+import { getMyMatches } from '../services/matchService'
+import { getViewerBadge } from '../utils/viewerItemBadges'
 import { useAuth } from '../context/AuthContext'
-
-const CATEGORIES = [
-  { value: 'electronics',  label: '📱 Electronics' },
-  { value: 'bag',          label: '🎒 Bag' },
-  { value: 'id_card',      label: '🪪 ID / Card' },
-  { value: 'keys',         label: '🔑 Keys' },
-  { value: 'clothing',     label: '👕 Clothing' },
-  { value: 'books_notes',  label: '📚 Books / Notes' },
-  { value: 'wallet',       label: '👜 Wallet' },
-  { value: 'jewellery',    label: '💍 Jewellery' },
-  { value: 'other',        label: '📦 Other' },
-]
+import CategoryFilterGrid from './CategoryFilterGrid'
+import {
+  Search,
+  PartyPopper,
+  EmptyInboxIcon,
+  X,
+} from './icons'
 
 const STATUSES_LOST  = [{ value: 'open', label: 'Open' }, { value: 'potential_match', label: 'Potential Match' }]
 const STATUSES_FOUND = [{ value: 'found', label: 'Available' }, { value: 'potential_match', label: 'Potential Match' }]
@@ -39,7 +36,7 @@ const SORT_OPTIONS = [
 
 const PAGE_SIZE = 20
 
-function Checkbox({ checked, onChange, label }) {
+function Checkbox({ checked, onChange, children }) {
   return (
     <label className="flex items-center gap-2 cursor-pointer group">
       <input
@@ -51,14 +48,14 @@ function Checkbox({ checked, onChange, label }) {
       />
       <span className="text-sm text-slate-700 dark:text-slate-300 group-hover:text-brand-600
                        dark:group-hover:text-brand-400 transition-colors">
-        {label}
+        {children}
       </span>
     </label>
   )
 }
 
 export default function BrowsePage({ defaultType }) {
-  const { isAuthenticated } = useAuth()
+  const { isAuthenticated, user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
 
   // ── Filter state ────────────────────────────────────────────────────────────
@@ -90,7 +87,6 @@ export default function BrowsePage({ defaultType }) {
   const { data: zones = [] } = useQuery({
     queryKey: ['campus-zones-public'],
     queryFn: getPublicCampusZones,
-    staleTime: 300_000,
   })
 
   // ── Browse query ────────────────────────────────────────────────────────────
@@ -110,8 +106,13 @@ export default function BrowsePage({ defaultType }) {
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ['browse', defaultType, isAuthenticated, queryParams],
     queryFn: () => browseItems(queryParams),
-    staleTime: 30_000,
     keepPreviousData: true,
+  })
+
+  const { data: matchData } = useQuery({
+    queryKey: ['my-matches'],
+    queryFn: getMyMatches,
+    enabled: isAuthenticated,
   })
 
   // ── Accumulated items for Load More ─────────────────────────────────────────
@@ -154,7 +155,8 @@ export default function BrowsePage({ defaultType }) {
 
   const hasFilters = q || categories.length || locationId || dateFrom || dateTo || statuses.length
 
-  const title    = defaultType === 'lost' ? '🔍 Lost Items' : '🎉 Found Items'
+  const TitleIcon = defaultType === 'lost' ? Search : PartyPopper
+  const titleText = defaultType === 'lost' ? 'Lost Items' : 'Found Items'
   const subtitle = defaultType === 'lost'
     ? 'Browse items reported lost on campus. See something you recognize?'
     : 'Browse items found on campus. Is one of these yours?'
@@ -168,7 +170,10 @@ export default function BrowsePage({ defaultType }) {
       <div className="page-container py-8 max-w-6xl">
         {/* ── Page header ── */}
         <div className="mb-6">
-          <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">{title}</h1>
+          <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+            <TitleIcon className="w-6 h-6 text-brand-600 dark:text-brand-400" aria-hidden />
+            {titleText}
+          </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">{subtitle}</p>
         </div>
 
@@ -228,20 +233,11 @@ export default function BrowsePage({ defaultType }) {
             <div className="border-t border-slate-200/60 dark:border-slate-700/60 pt-4
                             grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
               {/* Category */}
-              <div>
+              <div className="w-fit">
                 <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-2">
                   Category
                 </p>
-                <div className="flex flex-col gap-1.5">
-                  {CATEGORIES.map((c) => (
-                    <Checkbox
-                      key={c.value}
-                      checked={categories.includes(c.value)}
-                      onChange={() => toggleCategory(c.value)}
-                      label={c.label}
-                    />
-                  ))}
-                </div>
+                <CategoryFilterGrid selected={categories} onToggle={toggleCategory} />
               </div>
 
               {/* Location */}
@@ -270,8 +266,9 @@ export default function BrowsePage({ defaultType }) {
                       key={s.value}
                       checked={statuses.includes(s.value)}
                       onChange={() => toggleStatus(s.value)}
-                      label={s.label}
-                    />
+                    >
+                      {s.label}
+                    </Checkbox>
                   ))}
                 </div>
               </div>
@@ -308,7 +305,8 @@ export default function BrowsePage({ defaultType }) {
                     className="mt-4 text-sm text-red-500 hover:text-red-700 dark:hover:text-red-400
                                font-medium flex items-center gap-1 transition-colors"
                   >
-                    ✕ Clear all filters
+                    <X className="w-4 h-4" aria-hidden />
+                    Clear all filters
                   </button>
                 )}
               </div>
@@ -323,7 +321,7 @@ export default function BrowsePage({ defaultType }) {
           </div>
         ) : !allItems.length ? (
           <div className="flex flex-col items-center justify-center py-20 gap-3 text-center">
-            <span className="text-5xl">📭</span>
+            <EmptyInboxIcon className="w-14 h-14 text-slate-400" />
             <p className="text-slate-500 dark:text-slate-400 text-sm max-w-xs">
               {hasFilters
                 ? 'No items match your filters. Try adjusting or clearing them.'
@@ -345,7 +343,16 @@ export default function BrowsePage({ defaultType }) {
             {/* Card grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               {allItems.map((item) => (
-                <ItemCard key={item.id} item={item} />
+                <ItemCard
+                  key={item.id}
+                  item={item}
+                  viewerBadge={getViewerBadge(
+                    item,
+                    user?.id,
+                    matchData?.matches,
+                    { browse: true },
+                  )}
+                />
               ))}
             </div>
 

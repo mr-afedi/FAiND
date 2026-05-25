@@ -7,19 +7,21 @@ import { getMyLostItems, deleteItem, extendItem,
          getMyFoundItems, deleteFoundItem, extendFoundItem } from '../services/itemService'
 import NavBar from '../components/NavBar'
 import { getMyMatches } from '../services/matchService'
-
-// ── Trust event labels (Section 17.1) ─────────────────────────────────────────
-
-const TRUST_EVENT_LABELS = {
-  found_item_posted:        { label: 'Posted a found item',             icon: '📦' },
-  successful_return:        { label: 'Successful item return',          icon: '✅' },
-  failed_verification_2nd:  { label: 'Failed verification (2nd try)',   icon: '⚠️' },
-  failed_verification_3rd:  { label: 'Failed verification (3rd try)',   icon: '⚠️' },
-  false_claim_confirmed:    { label: 'Confirmed false claim',           icon: '🚫' },
-  fraud_confirmed:          { label: 'Admin-confirmed fraud',           icon: '🚫' },
-  user_report_received:     { label: 'User report received',            icon: '📢' },
-  admin_adjustment:         { label: 'Admin adjustment',                icon: '🛠️' },
-}
+import { invalidateAfterItemChange } from '../utils/queryCache'
+import {
+  TRUST_EVENT_META,
+  TrustEventIcon,
+  CategoryIcon,
+  getCategoryLabel,
+  EmptyInboxIcon,
+  MapPin,
+  Bot,
+  Star,
+  ClipboardList,
+  Check,
+  CircleDollarSign,
+  Package,
+} from '../components/icons'
 
 function formatRelativeTime(iso) {
   const diff = Math.floor((Date.now() - new Date(iso)) / 1000)
@@ -41,14 +43,14 @@ function TrustEventFeed({ events }) {
       </h3>
       <ul className="flex flex-col gap-2">
         {events.map((ev) => {
-          const meta = TRUST_EVENT_LABELS[ev.reason] ?? { label: ev.reason, icon: '•' }
+          const meta = TRUST_EVENT_META[ev.reason] ?? { label: ev.reason, Icon: Package }
           const positive = ev.delta > 0
           return (
             <li key={ev.id} className="flex items-center justify-between gap-3
                                        text-sm py-1.5 border-b border-slate-100 dark:border-slate-700/60
                                        last:border-0">
               <span className="flex items-center gap-2 min-w-0">
-                <span className="text-base leading-none">{meta.icon}</span>
+                <TrustEventIcon reason={ev.reason} />
                 <span className="text-slate-700 dark:text-slate-300 truncate">{meta.label}</span>
               </span>
               <span className="flex items-center gap-2 flex-shrink-0 text-xs text-slate-400">
@@ -85,7 +87,7 @@ function StatCard({ label, value, icon, sub }) {
     <div className="stat-card">
       <div className="flex items-start justify-between">
         <span className="text-2xl font-bold text-slate-800 dark:text-slate-100">{value}</span>
-        <span className="text-2xl leading-none">{icon}</span>
+        <span className="text-slate-500 dark:text-slate-400">{icon}</span>
       </div>
       <p className="text-sm font-medium text-slate-600 dark:text-slate-400">{label}</p>
       {sub && <p className="text-xs text-slate-400 dark:text-slate-600 mt-0.5">{sub}</p>}
@@ -98,8 +100,8 @@ function StatCard({ label, value, icon, sub }) {
 function EmptyTab({ message, cta, ctaTo }) {
   return (
     <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
-      <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-3xl">
-        📭
+      <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
+        <EmptyInboxIcon className="w-8 h-8 text-slate-400" />
       </div>
       <p className="text-slate-500 dark:text-slate-400 text-sm max-w-xs">{message}</p>
       {cta && (
@@ -107,20 +109,6 @@ function EmptyTab({ message, cta, ctaTo }) {
       )}
     </div>
   )
-}
-
-// ── Category labels ───────────────────────────────────────────────────────────
-
-const CATEGORY_LABELS = {
-  electronics: '📱 Electronics',
-  bag:         '🎒 Bag',
-  id_card:     '🪪 ID/Card',
-  keys:        '🔑 Keys',
-  clothing:    '👕 Clothing',
-  books_notes: '📚 Books/Notes',
-  wallet:      '👜 Wallet',
-  jewellery:   '💍 Jewellery',
-  other:       '📦 Other',
 }
 
 const STATUS_CLASSES = {
@@ -163,8 +151,8 @@ function LostItemRow({ item, onDelete, onExtend, deleting, extending }) {
           />
         ) : (
           <div className="w-16 h-16 rounded-xl bg-slate-100 dark:bg-slate-700
-                          flex items-center justify-center text-2xl">
-            {CATEGORY_LABELS[item.category]?.split(' ')[0] ?? '📦'}
+                          flex items-center justify-center text-slate-400">
+            <CategoryIcon category={item.category} className="w-7 h-7" />
           </div>
         )}
         {item.image_urls?.length > 1 && (
@@ -179,7 +167,7 @@ function LostItemRow({ item, onDelete, onExtend, deleting, extending }) {
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap items-center gap-2 mb-1">
           <span className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">
-            {CATEGORY_LABELS[item.category] ?? item.category}
+            {getCategoryLabel(item.category)}
           </span>
           <span className={`inline-flex px-2 py-0.5 rounded-lg text-xs font-medium ${STATUS_CLASSES[item.status] ?? ''}`}>
             {formatStatus(item.status)}
@@ -245,8 +233,8 @@ function FoundItemRow({ item, onDelete, onExtend, deleting, extending }) {
                className="w-16 h-16 rounded-xl object-cover" />
         ) : (
           <div className="w-16 h-16 rounded-xl bg-slate-100 dark:bg-slate-700
-                          flex items-center justify-center text-2xl">
-            {CATEGORY_LABELS[item.category]?.split(' ')[0] ?? '📦'}
+                          flex items-center justify-center text-slate-400">
+            <CategoryIcon category={item.category} className="w-7 h-7" />
           </div>
         )}
         {item.image_urls?.length > 1 && (
@@ -261,7 +249,7 @@ function FoundItemRow({ item, onDelete, onExtend, deleting, extending }) {
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap items-center gap-2 mb-1">
           <span className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">
-            {CATEGORY_LABELS[item.category] ?? item.category}
+            {getCategoryLabel(item.category)}
           </span>
           <span className={`inline-flex px-2 py-0.5 rounded-lg text-xs font-medium ${STATUS_CLASSES[item.status] ?? ''}`}>
             {formatStatus(item.status)}
@@ -308,62 +296,94 @@ function FoundItemRow({ item, onDelete, onExtend, deleting, extending }) {
 
 // ── Potential match row (Feature G — Path A) ──────────────────────────────────
 
-const CATEGORY_ICONS = {
-  electronics: '📱', bag: '🎒', id_card: '🪪', keys: '🔑',
-  clothing: '👕', books_notes: '📚', wallet: '👜', jewellery: '💍', other: '📦',
-}
-
 function MatchRow({ match }) {
   const pct = Math.round(match.match_score * 100)
   const isLostOwner = match.user_role === 'lost_owner'
   const other = isLostOwner ? match.found_item : match.lost_item
   const mine  = isLostOwner ? match.lost_item  : match.found_item
+  const status = match.status
 
   return (
     <div className="p-4 rounded-xl border border-violet-200/70 dark:border-violet-800/50
                     bg-violet-50/50 dark:bg-violet-900/10 flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-bold text-violet-700 dark:text-violet-300">
-          🤖 AI Match — {pct}% confidence
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <span className="text-sm font-bold text-violet-700 dark:text-violet-300 inline-flex items-center gap-1.5">
+          <Bot className="w-4 h-4 shrink-0" aria-hidden />
+          AI Match — {pct}% confidence
         </span>
-        <span className="text-xs px-2 py-0.5 rounded-full bg-violet-100 text-violet-700
-                         dark:bg-violet-900/40 dark:text-violet-300">
-          {isLostOwner ? 'You reported lost' : 'You reported found'}
-        </span>
+        <div className="flex items-center gap-2">
+          {status === 'verified' && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700
+                             dark:bg-green-900/40 dark:text-green-300">
+              Chat unlocked
+            </span>
+          )}
+          {status === 'pending_review' && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700
+                             dark:bg-amber-900/40 dark:text-amber-300">
+              Admin review
+            </span>
+          )}
+          <span className="text-xs px-2 py-0.5 rounded-full bg-violet-100 text-violet-700
+                           dark:bg-violet-900/40 dark:text-violet-300">
+            {isLostOwner ? 'You reported lost' : 'You reported found'}
+          </span>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
         <div className="p-3 rounded-lg bg-white dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/50">
           <p className="text-xs text-slate-400 mb-1">Your item</p>
-          <p className="font-medium text-slate-700 dark:text-slate-200 line-clamp-2">
-            {CATEGORY_ICONS[mine.category]?.split(' ')[0]} {mine.public_description}
+          <p className="font-medium text-slate-700 dark:text-slate-200 line-clamp-2 flex items-start gap-1.5">
+            <CategoryIcon category={mine.category} className="w-4 h-4 mt-0.5 shrink-0" />
+            <span className="line-clamp-2">{mine.public_description}</span>
           </p>
-          <p className="text-xs text-slate-400 mt-1">📍 {mine.location_label}</p>
+          <p className="text-xs text-slate-400 mt-1 inline-flex items-center gap-1">
+            <MapPin className="w-3 h-3 shrink-0" aria-hidden />
+            {mine.location_label}
+          </p>
           <Link to={`/items/${mine.id}`} className="text-xs text-brand-600 dark:text-brand-400 hover:underline mt-1 inline-block">
             View your post →
           </Link>
         </div>
         <div className="p-3 rounded-lg bg-white dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/50">
           <p className="text-xs text-slate-400 mb-1">Matched with</p>
-          <p className="font-medium text-slate-700 dark:text-slate-200 line-clamp-2">
-            {CATEGORY_ICONS[other.category]?.split(' ')[0]} {other.public_description}
+          <p className="font-medium text-slate-700 dark:text-slate-200 line-clamp-2 flex items-start gap-1.5">
+            <CategoryIcon category={other.category} className="w-4 h-4 mt-0.5 shrink-0" />
+            <span className="line-clamp-2">{other.public_description}</span>
           </p>
-          <p className="text-xs text-slate-400 mt-1">📍 {other.location_label}</p>
+          <p className="text-xs text-slate-400 mt-1 inline-flex items-center gap-1">
+            <MapPin className="w-3 h-3 shrink-0" aria-hidden />
+            {other.location_label}
+          </p>
           <Link to={`/items/${other.id}`} className="text-xs text-brand-600 dark:text-brand-400 hover:underline mt-1 inline-block">
             View matched post →
           </Link>
         </div>
       </div>
 
-      {isLostOwner && (
-        <button
-          onClick={() => toast('Ownership verification (Path A) comes in Feature I.', { icon: '🔐' })}
-          className="btn-primary text-sm py-2 w-full sm:w-auto"
+      {isLostOwner && status === 'active' && (
+        <Link
+          to={`/verify-ownership/${match.id}`}
+          className="btn-primary text-sm py-2 w-full sm:w-auto text-center"
         >
           Verify Ownership
-        </button>
+        </Link>
       )}
-      {!isLostOwner && (
+      {isLostOwner && status === 'pending_review' && (
+        <p className="text-xs text-amber-600 dark:text-amber-400">
+          Your verification is under admin review. We&apos;ll notify you when decided.
+        </p>
+      )}
+      {status === 'verified' && match.conversation_id && (
+        <Link
+          to={`/messages/${match.conversation_id}`}
+          className="btn-primary text-sm py-2 w-full sm:w-auto text-center"
+        >
+          Open Chat
+        </Link>
+      )}
+      {!isLostOwner && status === 'active' && (
         <p className="text-xs text-slate-500 dark:text-slate-400">
           Waiting for the lost item owner to verify ownership. You&apos;ll be notified when chat unlocks.
         </p>
@@ -395,31 +415,26 @@ export default function DashboardPage() {
   const { data: profile, isLoading, isError } = useQuery({
     queryKey: ['me'],
     queryFn: userService.getMe,
-    staleTime: 60_000,
   })
 
   const { data: lostData, isLoading: lostLoading } = useQuery({
     queryKey: ['my-lost-items'],
     queryFn: () => getMyLostItems({ skip: 0, limit: 50 }),
-    staleTime: 30_000,
   })
 
   const { data: foundData, isLoading: foundLoading } = useQuery({
     queryKey: ['my-found-items'],
     queryFn: () => getMyFoundItems({ skip: 0, limit: 50 }),
-    staleTime: 30_000,
   })
 
   const { data: trustHistory } = useQuery({
     queryKey: ['my-trust-events'],
     queryFn: () => userService.getMyTrustHistory({ limit: 5 }),
-    staleTime: 60_000,
   })
 
   const { data: matchData, isLoading: matchesLoading } = useQuery({
     queryKey: ['my-matches'],
     queryFn: getMyMatches,
-    staleTime: 30_000,
   })
 
   useEffect(() => {
@@ -429,8 +444,8 @@ export default function DashboardPage() {
 
   const deleteMutation = useMutation({
     mutationFn: deleteItem,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['my-lost-items'] })
+    onSuccess: (_data, itemId) => {
+      invalidateAfterItemChange(queryClient, itemId)
       toast.success('Item removed')
     },
     onError: (err) => toast.error(err.response?.data?.detail || 'Failed to remove item'),
@@ -439,8 +454,8 @@ export default function DashboardPage() {
 
   const extendMutation = useMutation({
     mutationFn: extendItem,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['my-lost-items'] })
+    onSuccess: (_data, itemId) => {
+      invalidateAfterItemChange(queryClient, itemId)
       toast.success('Expiry extended by 30 days')
     },
     onError: (err) => toast.error(err.response?.data?.detail || 'Failed to extend item'),
@@ -460,8 +475,8 @@ export default function DashboardPage() {
 
   const deleteFoundMutation = useMutation({
     mutationFn: deleteFoundItem,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['my-found-items'] })
+    onSuccess: (_data, itemId) => {
+      invalidateAfterItemChange(queryClient, itemId)
       toast.success('Item removed')
     },
     onError: (err) => toast.error(err.response?.data?.detail || 'Failed to remove item'),
@@ -470,8 +485,8 @@ export default function DashboardPage() {
 
   const extendFoundMutation = useMutation({
     mutationFn: extendFoundItem,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['my-found-items'] })
+    onSuccess: (_data, itemId) => {
+      invalidateAfterItemChange(queryClient, itemId)
       toast.success('Expiry extended by 30 days')
     },
     onError: (err) => toast.error(err.response?.data?.detail || 'Failed to extend item'),
@@ -557,25 +572,25 @@ export default function DashboardPage() {
           <StatCard
             label="Trust Score"
             value={trustHistory?.trust_score ?? profile.trust_score}
-            icon="⭐"
+            icon={<Star className="w-6 h-6" aria-hidden />}
             sub={trustHistory?.tier ?? profile.trust_tier}
           />
           <StatCard
             label="Items Posted"
             value={(lostData?.total ?? 0) + (foundData?.total ?? 0)}
-            icon="📋"
+            icon={<ClipboardList className="w-6 h-6" aria-hidden />}
             sub={`${lostData?.total ?? 0} lost · ${foundData?.total ?? 0} found`}
           />
           <StatCard
             label="Items Returned"
             value={0}
-            icon="✅"
+            icon={<Check className="w-6 h-6" aria-hidden />}
             sub="All time"
           />
           <StatCard
             label="Tips Received"
             value={0}
-            icon="💰"
+            icon={<CircleDollarSign className="w-6 h-6" aria-hidden />}
             sub="Count only"
           />
         </div>

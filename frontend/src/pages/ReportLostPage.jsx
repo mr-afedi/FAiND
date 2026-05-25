@@ -8,36 +8,21 @@
  *   - Campus location (dropdown from /items/campus-zones)
  *   - Date and time lost
  *   - Images (optional, max 2, Cloudinary upload)
- *   - 2–3 hidden verification Q&A pairs (both encrypted at rest)
+ *   V4.2: hidden verification Q&A are on found items only (finder sets them).
  */
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import NavBar from '../components/NavBar'
 import {
-  getCampusZones,
   createLostItem,
   uploadImageToCloudinary,
 } from '../services/itemService'
-
-const CATEGORIES = [
-  { value: 'electronics',  label: '📱 Electronics' },
-  { value: 'bag',          label: '🎒 Bag / Backpack' },
-  { value: 'id_card',      label: '🪪 ID / Card' },
-  { value: 'keys',         label: '🔑 Keys' },
-  { value: 'clothing',     label: '👕 Clothing' },
-  { value: 'books_notes',  label: '📚 Books / Notes' },
-  { value: 'wallet',       label: '👜 Wallet' },
-  { value: 'jewellery',    label: '💍 Jewellery' },
-  { value: 'other',        label: '📦 Other' },
-]
-
-const QUESTION_PLACEHOLDERS = [
-  'e.g. What was inside the front pocket?',
-  'e.g. What sticker was on the back?',
-  'e.g. Describe any damage or unique marks?',
-]
+import { invalidateAfterItemCreate } from '../utils/queryCache'
+import { useCampusZones } from '../hooks/useCampusZones'
+import { X } from '../components/icons'
+import CategoryPicker from '../components/CategoryPicker'
 
 // ── Reusable form field wrapper ───────────────────────────────────────────────
 
@@ -80,7 +65,9 @@ function ImageUploadSlot({ index, preview, uploading, onSelect, onRemove }) {
             className="absolute top-1 right-1 bg-red-600 text-white text-xs
                        rounded-full w-5 h-5 flex items-center justify-center
                        hover:bg-red-700 transition-colors"
-          >✕</button>
+          >
+            <X className="w-3 h-3" aria-hidden />
+          </button>
         </>
       ) : uploading ? (
         <div className="flex flex-col items-center gap-1 text-slate-400">
@@ -101,6 +88,7 @@ function ImageUploadSlot({ index, preview, uploading, onSelect, onRemove }) {
 
 export default function ReportLostPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
 
   // form state
   const [category, setCategory]             = useState('')
@@ -111,16 +99,10 @@ export default function ReportLostPage() {
   const [timeLost, setTimeLost]             = useState('')
   const [images, setImages]                 = useState([null, null])        // null | { file, preview, url }
   const [uploadingIdx, setUploadingIdx]     = useState(null)
-  const [questions, setQuestions]           = useState([
-    { question: '', answer: '' },
-    { question: '', answer: '' },
-  ])
 
-  // Campus zones
-  const { data: zonesData, isLoading: zonesLoading } = useQuery({
-    queryKey: ['campus-zones'],
-    queryFn: getCampusZones,
-  })
+  const todayMax = useMemo(() => new Date().toISOString().split('T')[0], [])
+
+  const { zones, zonesLoading } = useCampusZones()
 
   // Submit mutation
   // Guard against double-submit (e.g. rapid double-click or Enter key bounce)
@@ -129,6 +111,7 @@ export default function ReportLostPage() {
   const { mutate: submit, isPending } = useMutation({
     mutationFn: createLostItem,
     onSuccess: () => {
+      invalidateAfterItemCreate(queryClient, { type: 'lost' })
       toast.success('Lost item reported successfully!')
       navigate('/dashboard')
     },
@@ -188,25 +171,6 @@ export default function ReportLostPage() {
     })
   }
 
-  // ── Question helpers ────────────────────────────────────────────────────────
-  function setQuestion(idx, field, value) {
-    setQuestions((prev) => {
-      const next = [...prev]
-      next[idx] = { ...next[idx], [field]: value }
-      return next
-    })
-  }
-
-  function addQuestion() {
-    if (questions.length < 3) setQuestions((prev) => [...prev, { question: '', answer: '' }])
-  }
-
-  function removeQuestion(idx) {
-    if (questions.length > 2) {
-      setQuestions((prev) => prev.filter((_, i) => i !== idx))
-    }
-  }
-
   // ── Submit ──────────────────────────────────────────────────────────────────
   async function handleSubmit(e) {
     e.preventDefault()
@@ -220,10 +184,6 @@ export default function ReportLostPage() {
     if (!publicDesc.trim()) { submittingRef.current = false; return toast.error('Public description is required') }
     if (!privateDesc.trim()){ submittingRef.current = false; return toast.error('Private description is required') }
     if (!dateLost)          { submittingRef.current = false; return toast.error('Date lost is required') }
-    if (questions.some((q) => !q.question.trim() || !q.answer.trim())) {
-      submittingRef.current = false
-      return toast.error('All verification questions and answers must be filled in')
-    }
 
     // check any upload still in progress
     if (uploadingIdx !== null) {
@@ -248,10 +208,6 @@ export default function ReportLostPage() {
       location_id: locationId || null,
       date_occurred: dateOccurred,
       image_urls: imageUrls,
-      hidden_questions: questions.map((q) => ({
-        question: q.question.trim(),
-        answer: q.answer.trim(),
-      })),
     })
   }
 
@@ -273,23 +229,13 @@ export default function ReportLostPage() {
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-7">
 
-          {/* ── Category ── */}
-          <div className="glass p-6">
+          {/* ── Item details ── */}
+          <div className="glass p-6 relative z-[1] overflow-visible">
             <h2 className="section-heading mb-5">Item Details</h2>
             <div className="flex flex-col gap-5">
 
-              <Field label="Category" required>
-                <select
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  className="input-field"
-                  required
-                >
-                  <option value="">Select a category…</option>
-                  {CATEGORIES.map((c) => (
-                    <option key={c.value} value={c.value}>{c.label}</option>
-                  ))}
-                </select>
+              <Field label="Category" required hint="Choose the category that best matches your item.">
+                <CategoryPicker value={category} onChange={setCategory} />
               </Field>
 
               <Field
@@ -343,7 +289,7 @@ export default function ReportLostPage() {
                     className="input-field"
                   >
                     <option value="">Not sure / multiple locations</option>
-                    {(zonesData || []).map((z) => (
+                    {zones.map((z) => (
                       <option key={z.id} value={z.id}>{z.name}</option>
                     ))}
                   </select>
@@ -355,7 +301,7 @@ export default function ReportLostPage() {
                   <input
                     type="date"
                     value={dateLost}
-                    max={new Date().toISOString().split('T')[0]}
+                    max={todayMax}
                     onChange={(e) => setDateLost(e.target.value)}
                     className="input-field"
                     required
@@ -391,73 +337,6 @@ export default function ReportLostPage() {
                 />
               ))}
             </div>
-          </div>
-
-          {/* ── Hidden Verification Q&A ── */}
-          <div className="glass p-6">
-            <h2 className="section-heading mb-1">Verification Questions</h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mb-1">
-              Set 2–3 questions that only you, the real owner, could answer correctly.
-              Both the questions and answers are encrypted and <strong>never shown to anyone</strong>, including you after submission.
-            </p>
-            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700
-                            rounded-xl p-3 mb-5 text-xs text-amber-800 dark:text-amber-300">
-              <strong>Good questions:</strong> "What was inside the front pocket?" · "What sticker was on the back?" · "Describe any damage or marks"<br />
-              <strong>Bad questions:</strong> "What colour is it?" · "What brand is it?" (too easy to guess)
-            </div>
-
-            <div className="flex flex-col gap-5">
-              {questions.map((q, idx) => (
-                <div key={idx} className="flex flex-col gap-3 p-4 rounded-xl
-                                          bg-slate-50 dark:bg-slate-800/50
-                                          border border-slate-200 dark:border-slate-700">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">
-                      Question {idx + 1}
-                    </span>
-                    {questions.length > 2 && (
-                      <button
-                        type="button"
-                        onClick={() => removeQuestion(idx)}
-                        className="text-xs text-red-500 hover:text-red-700 transition-colors"
-                      >
-                        Remove
-                      </button>
-                    )}
-                  </div>
-                  <input
-                    type="text"
-                    value={q.question}
-                    onChange={(e) => setQuestion(idx, 'question', e.target.value)}
-                    placeholder={QUESTION_PLACEHOLDERS[idx] || 'Enter verification question'}
-                    maxLength={300}
-                    className="input-field"
-                    required
-                  />
-                  <input
-                    type="text"
-                    value={q.answer}
-                    onChange={(e) => setQuestion(idx, 'answer', e.target.value)}
-                    placeholder="Your answer (encrypted — never shown again)"
-                    maxLength={300}
-                    className="input-field"
-                    required
-                  />
-                </div>
-              ))}
-            </div>
-
-            {questions.length < 3 && (
-              <button
-                type="button"
-                onClick={addQuestion}
-                className="mt-4 text-sm text-brand-600 dark:text-brand-400
-                           hover:text-brand-700 dark:hover:text-brand-300
-                           font-medium transition-colors"
-              >
-                + Add another question
-              </button>
-            )}
           </div>
 
           {/* ── Actions ── */}

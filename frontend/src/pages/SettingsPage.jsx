@@ -7,6 +7,7 @@ import { uploadImageToCloudinary } from '../services/itemService'
 import { useAuth } from '../context/AuthContext'
 import NavBar from '../components/NavBar'
 import { usePushNotifications } from '../hooks/usePushNotifications'
+import { invalidateAfterProfileUpdate } from '../utils/queryCache'
 
 // ── Reusable toggle component ─────────────────────────────────────────────────
 
@@ -163,7 +164,6 @@ export default function SettingsPage() {
   const { data: profile, isLoading } = useQuery({
     queryKey: ['me'],
     queryFn: userService.getMe,
-    staleTime: 60_000,
     onSuccess: (data) => {
       if (!profileForm) {
         setProfileForm({
@@ -190,6 +190,7 @@ export default function SettingsPage() {
     mutationFn: userService.updateProfile,
     onSuccess: (data) => {
       queryClient.setQueryData(['me'], data)
+      invalidateAfterProfileUpdate(queryClient)
       toast.success('Profile updated.')
     },
     onError: (err) => {
@@ -222,6 +223,7 @@ export default function SettingsPage() {
     mutationFn: userService.updateSettings,
     onSuccess: (data) => {
       queryClient.setQueryData(['me'], data)
+      invalidateAfterProfileUpdate(queryClient)
     },
     onError: () => toast.error('Failed to save setting.'),
   })
@@ -259,6 +261,7 @@ export default function SettingsPage() {
       // Immediately save to profile
       await userService.updateProfile({ profile_photo_url: url })
       queryClient.setQueryData(['me'], (old) => old ? { ...old, profile_photo_url: url } : old)
+      invalidateAfterProfileUpdate(queryClient)
       // Also keep the local form in sync
       setProfileForm((f) => f ? { ...f, profile_photo_url: url } : f)
       toast.success('Profile photo updated!')
@@ -274,6 +277,7 @@ export default function SettingsPage() {
     try {
       await userService.updateProfile({ profile_photo_url: null })
       queryClient.setQueryData(['me'], (old) => old ? { ...old, profile_photo_url: null } : old)
+      invalidateAfterProfileUpdate(queryClient)
       setProfileForm((f) => f ? { ...f, profile_photo_url: '' } : f)
       toast.success('Profile photo removed')
     } catch (err) {
@@ -525,7 +529,7 @@ export default function SettingsPage() {
             label="Push Notifications"
             description={
               permissionState === 'denied'
-                ? '⚠️ Blocked by browser — allow in browser settings then try again'
+                ? 'Blocked by browser — allow in browser settings then try again'
                 : !pushSupported
                 ? 'Not supported in this browser'
                 : 'Get push alerts for matches and messages, even when the app is closed'

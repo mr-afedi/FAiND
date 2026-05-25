@@ -16,6 +16,23 @@ import { useAuth } from '../context/AuthContext'
 import NavBar from '../components/NavBar'
 import ItemCard from '../components/ItemCard'
 import { getHomepageData } from '../services/itemService'
+import { getMyMatches } from '../services/matchService'
+import { getViewerBadge } from '../utils/viewerItemBadges'
+import {
+  CategoryIcon,
+  getCategoryLabel,
+  Search,
+  PartyPopper,
+  Check,
+  PackageSearch,
+  EmptyInboxIcon,
+  Bot,
+  Lock,
+  Globe,
+  Zap,
+  AlertTriangle,
+  Plus,
+} from '../components/icons'
 
 // Multiple Unsplash URLs tried in order; falls back to a gradient if all fail
 const HERO_IMAGES = [
@@ -52,11 +69,6 @@ function HeroBackground() {
   )
 }
 
-const CATEGORY_ICONS = {
-  electronics: '📱', bag: '🎒', id_card: '🪪', keys: '🔑',
-  clothing: '👕', books_notes: '📚', wallet: '👜', jewellery: '💍', other: '📦',
-}
-
 // ── FAB (Floating Action Button) ─────────────────────────────────────────────
 
 function FAB({ isAuthenticated }) {
@@ -82,7 +94,8 @@ function FAB({ isAuthenticated }) {
                        text-sm font-semibold px-4 py-2.5 rounded-2xl shadow-lg
                        transition-all duration-150 animate-fade-in"
           >
-            <span>😢</span> Report Lost Item
+            <PackageSearch className="w-4 h-4 shrink-0" aria-hidden />
+            Report Lost Item
           </button>
           <button
             onClick={() => handleAction('/report/found')}
@@ -90,7 +103,8 @@ function FAB({ isAuthenticated }) {
                        text-sm font-semibold px-4 py-2.5 rounded-2xl shadow-lg
                        transition-all duration-150 animate-fade-in"
           >
-            <span>🎉</span> Report Found Item
+            <PartyPopper className="w-4 h-4 shrink-0" aria-hidden />
+            Report Found Item
           </button>
         </>
       )}
@@ -103,7 +117,7 @@ function FAB({ isAuthenticated }) {
                       : 'bg-brand-600 hover:bg-brand-700'}`}
         aria-label="Report item"
       >
-        +
+        <Plus className="w-6 h-6" aria-hidden />
       </button>
     </div>
   )
@@ -111,10 +125,12 @@ function FAB({ isAuthenticated }) {
 
 // ── Section heading ───────────────────────────────────────────────────────────
 
-function SectionHeading({ title, linkTo, linkLabel }) {
+function SectionHeading({ children, linkTo, linkLabel }) {
   return (
     <div className="flex items-center justify-between mb-4">
-      <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100">{title}</h2>
+      <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+        {children}
+      </h2>
       {linkTo && (
         <Link to={linkTo}
               className="text-sm font-medium text-brand-600 dark:text-brand-400
@@ -132,7 +148,7 @@ function EmptyPreview({ message }) {
   return (
     <div className="flex flex-col items-center justify-center py-10 text-center gap-2
                     rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
-      <span className="text-3xl">📭</span>
+      <EmptyInboxIcon className="w-10 h-10 text-slate-400" />
       <p className="text-sm text-slate-400 dark:text-slate-500">{message}</p>
     </div>
   )
@@ -141,24 +157,24 @@ function EmptyPreview({ message }) {
 // ── Recently Returned card (Section 16.6 — anonymous, no names/images) ───────
 
 function ReturnedCard({ item }) {
-  const icon = CATEGORY_ICONS[item.category] ?? '📦'
-  const label = item.category.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  const label = getCategoryLabel(item.category)
   const date = new Date(item.returned_at).toLocaleDateString()
   return (
     <div className="flex items-center gap-3 p-3 rounded-xl
                     bg-white dark:bg-slate-800/60 border border-slate-200/70
                     dark:border-slate-700/50">
       <div className="w-10 h-10 rounded-xl bg-green-100 dark:bg-green-900/30
-                      flex items-center justify-center text-xl flex-shrink-0">
-        {icon}
+                      flex items-center justify-center text-slate-600 dark:text-slate-300 flex-shrink-0">
+        <CategoryIcon category={item.category} className="w-5 h-5" />
       </div>
       <div className="min-w-0">
         <p className="text-sm font-medium text-slate-700 dark:text-slate-300 truncate">{label}</p>
         <p className="text-xs text-slate-400 dark:text-slate-500">{date}</p>
       </div>
       <span className="ml-auto flex-shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full
-                       bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
-        Returned ✓
+                       bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400
+                       inline-flex items-center gap-0.5">
+        Returned <Check className="w-3 h-3" aria-hidden />
       </span>
     </div>
   )
@@ -167,10 +183,10 @@ function ReturnedCard({ item }) {
 // ── Why FAiND section ─────────────────────────────────────────────────────────
 
 const WHY_ITEMS = [
-  { icon: '🤖', title: 'AI-Powered Matching',    desc: 'Our system automatically matches lost and found items using descriptions, images, and location.' },
-  { icon: '🔐', title: 'Secure Verification',    desc: 'Hidden questions and AI scoring ensure only the true owner can claim their belongings.' },
-  { icon: '🌍', title: 'Campus Community',        desc: 'Built specifically for GCTU students and staff — everyone helping each other.' },
-  { icon: '⚡', title: 'Fast & Easy',             desc: 'Post a lost or found item in under 2 minutes. No paperwork, no queues.' },
+  { Icon: Bot, title: 'AI-Powered Matching', desc: 'Our system automatically matches lost and found items using descriptions, images, and location.' },
+  { Icon: Lock, title: 'Secure Verification', desc: 'Hidden questions and AI scoring ensure only the true owner can claim their belongings.' },
+  { Icon: Globe, title: 'Campus Community', desc: 'Built specifically for GCTU students and staff — everyone helping each other.' },
+  { Icon: Zap, title: 'Fast & Easy', desc: 'Post a lost or found item in under 2 minutes. No paperwork, no queues.' },
 ]
 
 function WhySection() {
@@ -184,7 +200,7 @@ function WhySection() {
           {WHY_ITEMS.map((item) => (
             <div key={item.title}
                  className="glass p-5 rounded-2xl flex flex-col gap-2 text-center hover:shadow-md transition-shadow">
-              <span className="text-3xl">{item.icon}</span>
+              <item.Icon className="w-8 h-8 mx-auto text-brand-600 dark:text-brand-400" aria-hidden />
               <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">{item.title}</h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">{item.desc}</p>
             </div>
@@ -202,7 +218,7 @@ function SafetyBanner() {
     <div className="mx-4 mb-8 max-w-5xl lg:mx-auto px-4 py-3 rounded-2xl
                     bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/40
                     flex items-start gap-3">
-      <span className="text-xl flex-shrink-0 mt-0.5">⚠️</span>
+      <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" aria-hidden />
       <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
         <strong>Safety reminder:</strong> Always arrange item pick-ups in public, well-lit areas on campus.
         Never share personal financial information, passwords, or meet off-campus with strangers.
@@ -215,13 +231,18 @@ function SafetyBanner() {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function HomePage() {
-  const { isAuthenticated } = useAuth()
+  const { isAuthenticated, user } = useAuth()
   const navigate = useNavigate()
+
+  const { data: matchData } = useQuery({
+    queryKey: ['my-matches'],
+    queryFn: getMyMatches,
+    enabled: isAuthenticated,
+  })
 
   const { data: homepageData, isLoading } = useQuery({
     queryKey: ['homepage', isAuthenticated],
     queryFn: getHomepageData,
-    staleTime: 30_000,
     refetchInterval: 60_000,
   })
 
@@ -292,13 +313,25 @@ export default function HomePage() {
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_2px_1fr] gap-x-12 gap-y-10">
             {/* Lost Items column */}
             <div>
-              <SectionHeading title="🔍 Latest Lost Items" linkTo="/lost" linkLabel="See All Lost Items" />
+              <SectionHeading linkTo="/lost" linkLabel="See All Lost Items">
+                <Search className="w-5 h-5 text-brand-600 dark:text-brand-400" aria-hidden />
+                Latest Lost Items
+              </SectionHeading>
               {!homepageData?.latest_lost?.length ? (
                 <EmptyPreview message="No lost items reported yet. Be the first to post." />
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {homepageData.latest_lost.map((item) => (
-                    <ItemCard key={item.id} item={item} />
+                    <ItemCard
+                      key={item.id}
+                      item={item}
+                      viewerBadge={getViewerBadge(
+                        item,
+                        user?.id,
+                        matchData?.matches,
+                        { homepage: true },
+                      )}
+                    />
                   ))}
                 </div>
               )}
@@ -309,13 +342,25 @@ export default function HomePage() {
 
             {/* Found Items column */}
             <div>
-              <SectionHeading title="🎉 Latest Found Items" linkTo="/found" linkLabel="See All Found Items" />
+              <SectionHeading linkTo="/found" linkLabel="See All Found Items">
+                <PartyPopper className="w-5 h-5 text-brand-600 dark:text-brand-400" aria-hidden />
+                Latest Found Items
+              </SectionHeading>
               {!homepageData?.latest_found?.length ? (
                 <EmptyPreview message="No found items posted yet. Found something? Help reunite it." />
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {homepageData.latest_found.map((item) => (
-                    <ItemCard key={item.id} item={item} />
+                    <ItemCard
+                      key={item.id}
+                      item={item}
+                      viewerBadge={getViewerBadge(
+                        item,
+                        user?.id,
+                        matchData?.matches,
+                        { homepage: true },
+                      )}
+                    />
                   ))}
                 </div>
               )}
@@ -327,7 +372,10 @@ export default function HomePage() {
       {/* ── Recently Returned (Section 16.6 — anonymous) ────────────────── */}
       {homepageData?.recently_returned?.length > 0 && (
         <section className="page-container pb-12 max-w-5xl">
-          <SectionHeading title="✅ Recently Returned" />
+          <SectionHeading>
+            <Check className="w-5 h-5 text-green-600 dark:text-green-400" aria-hidden />
+            Recently Returned
+          </SectionHeading>
           <p className="text-xs text-slate-400 dark:text-slate-500 mb-4">
             Items successfully reunited with their owners in the past 7 days — names hidden to protect privacy.
           </p>

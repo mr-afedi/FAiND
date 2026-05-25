@@ -20,7 +20,6 @@ export default function PublicProfilePage() {
   const { data: profile, isLoading, isError } = useQuery({
     queryKey: ['profile', username],
     queryFn: () => userService.getPublicProfile(username),
-    staleTime: 60_000,
     retry: false,
   })
 

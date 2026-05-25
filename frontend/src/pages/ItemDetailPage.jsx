@@ -21,13 +21,27 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { useAuth } from '../context/AuthContext'
 import NavBar from '../components/NavBar'
+import ItemUnavailablePage from './ItemUnavailablePage'
 import { getItemDetail, deleteItem, deleteFoundItem, extendItem, extendFoundItem } from '../services/itemService'
-
-const CATEGORY_LABELS = {
-  electronics: '📱 Electronics', bag: '🎒 Bag', id_card: '🪪 ID / Card',
-  keys: '🔑 Keys', clothing: '👕 Clothing', books_notes: '📚 Books / Notes',
-  wallet: '👜 Wallet', jewellery: '💍 Jewellery', other: '📦 Other',
-}
+import { getMyMatches } from '../services/matchService'
+import { invalidateAfterItemChange } from '../utils/queryCache'
+import { matchVerificationInProgress, matchChatUnlocked } from '../utils/viewerItemBadges'
+import {
+  CategoryIcon,
+  CategoryLabel,
+  getCategoryLabel,
+  MapPin,
+  AlertTriangle,
+  X,
+  ChevronLeft,
+  ChevronRight,
+  Hand,
+  ScanSearch,
+  Flag,
+  Clock,
+  Trash2,
+  Sparkles,
+} from '../components/icons'
 
 const STATUS_PILL = {
   open:               'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
@@ -69,7 +83,7 @@ function Lightbox({ images, startIdx, onClose }) {
                    w-10 h-10 flex items-center justify-center rounded-full
                    bg-white/10 hover:bg-white/20 transition-colors"
       >
-        ✕
+        <X className="w-5 h-5" aria-hidden />
       </button>
       <img
         src={images[idx]}
@@ -95,14 +109,18 @@ function Lightbox({ images, startIdx, onClose }) {
           onClick={(e) => { e.stopPropagation(); setIdx((i) => i - 1) }}
           className="absolute left-4 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full
                      bg-white/10 hover:bg-white/20 text-white flex items-center justify-center"
-        >←</button>
+        >
+          <ChevronLeft className="w-5 h-5" aria-hidden />
+        </button>
       )}
       {idx < images.length - 1 && (
         <button
           onClick={(e) => { e.stopPropagation(); setIdx((i) => i + 1) }}
           className="absolute right-4 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full
                      bg-white/10 hover:bg-white/20 text-white flex items-center justify-center"
-        >→</button>
+        >
+          <ChevronRight className="w-5 h-5" aria-hidden />
+        </button>
       )}
     </div>
   )
@@ -120,24 +138,78 @@ export default function ItemDetailPage() {
   const { data: item, isLoading, isError } = useQuery({
     queryKey: ['item', itemId],
     queryFn: () => getItemDetail(itemId),
-    staleTime: 60_000,
   })
 
-  const isOwner   = item && user && item.posted_by?.id === user.id
-  const isLost    = item?.item_type === 'lost'
+  const isOwner = item && user && item.posted_by?.id === user.id
+  const isLost  = item?.item_type === 'lost'
+
+  const { data: matchData } = useQuery({
+    queryKey: ['my-matches-for-item', itemId],
+    queryFn: getMyMatches,
+    enabled: Boolean(isAuthenticated),
+  })
+
+  const ownerMatch = matchData?.matches?.find(
+    (m) => m.user_role === 'lost_owner'
+      && String(m.lost_item?.id) === String(itemId)
+      && ['active', 'pending_review', 'verified'].includes(m.status),
+  )
+
+  const matchAsLostOwnerOnFound = matchData?.matches?.find(
+    (m) => m.user_role === 'lost_owner'
+      && String(m.found_item?.id) === String(itemId)
+      && ['active', 'pending_review', 'verified'].includes(m.status),
+  )
+
+  const matchAsFoundOwnerOnFound = matchData?.matches?.find(
+    (m) => m.user_role === 'found_owner'
+      && String(m.found_item?.id) === String(itemId)
+      && ['active', 'pending_review', 'verified'].includes(m.status),
+  )
+
+  const matchAsFoundOwnerOnLost = matchData?.matches?.find(
+    (m) => m.user_role === 'found_owner'
+      && String(m.lost_item?.id) === String(itemId)
+      && ['active', 'pending_review', 'verified'].includes(m.status),
+  )
+
+  const isFinderUser = Boolean(
+    matchData?.matches?.some((m) => m.user_role === 'found_owner'),
+  )
+
+  const foundOwnerMatchedOnLost = Boolean(matchAsFoundOwnerOnLost)
+  const foundOwnerViewingMatchedLost = Boolean(
+    matchAsFoundOwnerOnLost && matchVerificationInProgress(matchAsFoundOwnerOnLost),
+  )
+  const foundOwnerChatOpenOnLost = Boolean(
+    matchAsFoundOwnerOnLost && matchChatUnlocked(matchAsFoundOwnerOnLost),
+  )
+
   const backTo    = isLost ? '/lost' : '/found'
-  const backLabel = isLost ? '← Lost Items' : '← Found Items'
+  const backLabel = isLost ? 'Lost Items' : 'Found Items'
   const days      = item ? daysLeft(item.expiry_date) : 0
 
-  // Claim buttons only shown when item is in an actionable state (open/found)
-  const isClaimable = item && ['open', 'found'].includes(item.status)
+  // Path B/C: only block claims on terminal statuses (not during verification)
+  const NON_CLAIMABLE_STATUSES = ['returned', 'expired', 'archived', 'closed']
+  const isClaimable = item && !NON_CLAIMABLE_STATUSES.includes(item.status)
+
+  const lostOwnerViewingMatchedFound = Boolean(matchAsLostOwnerOnFound)
+  const displayStatus = item && (
+    !isOwner && item.status === 'under_verification'
+      ? (isLost ? 'open' : 'found')
+      : item.status
+  )
+  const showStatusBadge = item && (
+    isOwner
+      ? STATUS_PILL[item.status]
+      : item.status !== 'under_verification' && STATUS_PILL[displayStatus]
+  )
 
   const deleteMutation = useMutation({
     mutationFn: (id) => (isLost ? deleteItem(id) : deleteFoundItem(id)),
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
+      invalidateAfterItemChange(queryClient, id)
       toast.success('Item removed')
-      queryClient.invalidateQueries({ queryKey: ['my-lost-items'] })
-      queryClient.invalidateQueries({ queryKey: ['my-found-items'] })
       navigate(backTo)
     },
     onError: (err) => toast.error(err.response?.data?.detail || 'Failed to remove item'),
@@ -145,9 +217,9 @@ export default function ItemDetailPage() {
 
   const extendMutation = useMutation({
     mutationFn: (id) => (isLost ? extendItem(id) : extendFoundItem(id)),
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
+      invalidateAfterItemChange(queryClient, id)
       toast.success('Expiry extended by 30 days')
-      queryClient.invalidateQueries({ queryKey: ['item', itemId] })
     },
     onError: (err) => toast.error(err.response?.data?.detail || 'Failed to extend'),
   })
@@ -162,7 +234,9 @@ export default function ItemDetailPage() {
       navigate('/login', { state: { from: `/items/${itemId}` } })
       return
     }
-    toast('Claim flows are coming in a future update.', { icon: '🔜' })
+    toast('Claim flows are coming in a future update.', {
+      icon: <Sparkles className="w-5 h-5 text-brand-500" aria-hidden />,
+    })
   }
 
   if (isLoading) {
@@ -177,17 +251,7 @@ export default function ItemDetailPage() {
   }
 
   if (isError || !item) {
-    return (
-      <>
-        <NavBar />
-        <div className="page-container py-20 text-center">
-          <p className="text-5xl mb-4">🔍</p>
-          <h1 className="text-xl font-semibold text-slate-700 dark:text-slate-300 mb-2">Item not found</h1>
-          <p className="text-sm text-slate-400 mb-8">This item may have been removed or never existed.</p>
-          <Link to="/" className="btn-primary text-sm">Go Home</Link>
-        </div>
-      </>
-    )
+    return <ItemUnavailablePage />
   }
 
   const poster     = item.posted_by
@@ -211,12 +275,14 @@ export default function ItemDetailPage() {
       <div className="page-container py-8 max-w-4xl">
         {/* ── Breadcrumb ── */}
         <div className="flex items-center gap-2 mb-6 text-sm text-slate-500 dark:text-slate-400">
-          <Link to={backTo} className="hover:text-brand-600 dark:hover:text-brand-400 transition-colors">
+          <Link to={backTo} className="inline-flex items-center gap-1 hover:text-brand-600 dark:hover:text-brand-400 transition-colors">
+            <ChevronLeft className="w-4 h-4 shrink-0" aria-hidden />
             {backLabel}
           </Link>
           <span>/</span>
-          <span className="text-slate-700 dark:text-slate-300 truncate max-w-xs">
-            {CATEGORY_LABELS[item.category] ?? item.category}
+          <span className="text-slate-700 dark:text-slate-300 truncate max-w-xs inline-flex items-center gap-1">
+            <CategoryIcon category={item.category} className="w-3.5 h-3.5" />
+            {getCategoryLabel(item.category)}
           </span>
         </div>
 
@@ -233,7 +299,7 @@ export default function ItemDetailPage() {
                   <img
                     src={item.image_urls[0]}
                     alt="Item photo"
-                    className="w-full h-full object-cover hover:scale-105 transition-transform duration-300"
+                    className="w-full h-full object-contain"
                   />
                 </div>
                 {item.image_urls.length > 1 && (
@@ -246,7 +312,7 @@ export default function ItemDetailPage() {
                         onClick={() => setLightboxIdx(i + 1)}
                       >
                         <img src={url} alt=""
-                             className="w-full h-full object-cover hover:scale-105 transition-transform" />
+                             className="w-full h-full object-contain" />
                       </div>
                     ))}
                   </div>
@@ -254,8 +320,8 @@ export default function ItemDetailPage() {
               </>
             ) : (
               <div className="w-full aspect-square rounded-2xl bg-slate-100 dark:bg-slate-800
-                              flex items-center justify-center text-7xl">
-                {CATEGORY_LABELS[item.category]?.split(' ')[0] ?? '📦'}
+                              flex items-center justify-center text-slate-400">
+                <CategoryIcon category={item.category} className="w-14 h-14" />
               </div>
             )}
           </div>
@@ -268,9 +334,9 @@ export default function ItemDetailPage() {
                                ${isLost ? 'bg-red-500 text-white' : 'bg-brand-600 text-white'}`}>
                 {isLost ? 'LOST' : 'FOUND'}
               </span>
-              {STATUS_PILL[item.status] && (
-                <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${STATUS_PILL[item.status]}`}>
-                  {formatStatus(item.status)}
+              {showStatusBadge && (
+                <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${STATUS_PILL[displayStatus]}`}>
+                  {formatStatus(displayStatus)}
                 </span>
               )}
               {/* Category — links back to browse filtered by category (Section 27.5) */}
@@ -281,7 +347,7 @@ export default function ItemDetailPage() {
                            hover:bg-brand-50 dark:hover:bg-brand-900/20 hover:text-brand-600
                            transition-colors"
               >
-                {CATEGORY_LABELS[item.category] ?? item.category}
+                <CategoryLabel category={item.category} className="text-xs font-medium" />
               </Link>
             </div>
 
@@ -299,8 +365,9 @@ export default function ItemDetailPage() {
             <div className="glass p-4 rounded-2xl flex flex-col gap-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-slate-500 dark:text-slate-400">Location</span>
-                <span className="font-medium text-slate-700 dark:text-slate-300">
-                  📍 {item.location_label}
+                <span className="font-medium text-slate-700 dark:text-slate-300 inline-flex items-center gap-1">
+                  <MapPin className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                  {item.location_label}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -327,7 +394,12 @@ export default function ItemDetailPage() {
                   <span className={`font-medium ${days <= 3
                     ? 'text-orange-600 dark:text-orange-400'
                     : 'text-slate-700 dark:text-slate-300'}`}>
-                    {days <= 3 ? `⚠️ In ${days}d` : `In ${days}d`}
+                    {days <= 3 ? (
+                      <span className="inline-flex items-center gap-1">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                        In {days}d
+                      </span>
+                    ) : `In ${days}d`}
                   </span>
                 </div>
               )}
@@ -359,50 +431,137 @@ export default function ItemDetailPage() {
               {/* Non-owner, logged-in or guest */}
               {!isOwner && (
                 <>
-                  {isClaimable && isLost && (
-                    <button
-                      onClick={handleClaimAction}
-                      className="btn-primary w-full py-3 text-sm font-semibold"
-                    >
-                      🙋 I Have This Item
-                    </button>
-                  )}
-                  {isClaimable && !isLost && (
-                    <button
-                      onClick={handleClaimAction}
-                      className="btn-primary w-full py-3 text-sm font-semibold"
-                    >
-                      🔎 This Might Be Mine
-                    </button>
-                  )}
-                  {!isClaimable && item && (
-                    <p className="text-xs text-center text-slate-400 dark:text-slate-500 py-2">
-                      This item is currently {formatStatus(item.status)} and cannot accept new claims.
+                  {lostOwnerViewingMatchedFound && matchAsLostOwnerOnFound?.status === 'pending_review' && (
+                    <p className="text-sm text-center text-amber-700 dark:text-amber-300 py-3 px-4
+                                  rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200/80
+                                  dark:border-amber-800/50">
+                      Your ownership verification for this item is currently under admin review.
                     </p>
                   )}
-                  <button
-                    onClick={() => {
-                      if (!isAuthenticated) navigate('/login', { state: { from: `/items/${itemId}` } })
-                      else toast('Report flow coming in a future update.', { icon: '🚩' })
-                    }}
-                    className="text-xs text-slate-400 hover:text-red-500 dark:hover:text-red-400
-                               transition-colors text-center py-1"
-                  >
-                    🚩 Flag / Report this post
-                  </button>
+                  {lostOwnerViewingMatchedFound && matchAsLostOwnerOnFound?.status === 'active' && (
+                    <Link
+                      to={`/verify-ownership/${matchAsLostOwnerOnFound.id}`}
+                      className="btn-primary w-full py-3 text-sm font-semibold text-center"
+                    >
+                      Verify Ownership
+                    </Link>
+                  )}
+                  {lostOwnerViewingMatchedFound && matchAsLostOwnerOnFound?.status === 'verified'
+                    && matchAsLostOwnerOnFound.conversation_id && (
+                    <Link
+                      to={`/messages/${matchAsLostOwnerOnFound.conversation_id}`}
+                      className="btn-primary w-full py-3 text-sm font-semibold text-center"
+                    >
+                      Open Chat
+                    </Link>
+                  )}
+                  {foundOwnerViewingMatchedLost && (
+                    <p className="text-sm text-center text-violet-700 dark:text-violet-300 py-3 px-4
+                                  rounded-xl bg-violet-50 dark:bg-violet-900/20 border border-violet-200/80
+                                  dark:border-violet-800/50">
+                      An ownership claim is in progress for your matched item
+                    </p>
+                  )}
+                  {foundOwnerChatOpenOnLost && (
+                    <p className="text-sm text-center text-green-700 dark:text-green-300 py-3 px-4
+                                  rounded-xl bg-green-50 dark:bg-green-900/20 border border-green-200/80
+                                  dark:border-green-800/50">
+                      You are matched with this item and chat is open
+                    </p>
+                  )}
+                  {foundOwnerMatchedOnLost && matchAsFoundOwnerOnLost?.status === 'active' && (
+                    <p className="text-sm text-center text-slate-600 dark:text-slate-400 py-3 px-4
+                                  rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80
+                                  dark:border-slate-700/50">
+                      You are already matched with this item. Waiting for the owner to verify ownership.
+                    </p>
+                  )}
+                  {!lostOwnerViewingMatchedFound && !foundOwnerMatchedOnLost && isClaimable && isLost && (
+                    <button
+                      onClick={handleClaimAction}
+                      className="btn-primary w-full py-3 text-sm font-semibold inline-flex items-center justify-center gap-2"
+                    >
+                      <Hand className="w-4 h-4 shrink-0" aria-hidden />
+                      I Have This Item
+                    </button>
+                  )}
+                  {!lostOwnerViewingMatchedFound && !foundOwnerMatchedOnLost && isClaimable && !isLost && !isFinderUser && (
+                    <button
+                      onClick={handleClaimAction}
+                      className="btn-primary w-full py-3 text-sm font-semibold inline-flex items-center justify-center gap-2"
+                    >
+                      <ScanSearch className="w-4 h-4 shrink-0" aria-hidden />
+                      This Might Be Mine
+                    </button>
+                  )}
+                  {!lostOwnerViewingMatchedFound && !foundOwnerMatchedOnLost && !isClaimable && item && (
+                    <p className="text-xs text-center text-slate-400 dark:text-slate-500 py-2">
+                      This item is currently {formatStatus(displayStatus)} and cannot accept new claims.
+                    </p>
+                  )}
+                  {!foundOwnerViewingMatchedLost && (
+                    <button
+                      onClick={() => {
+                        if (!isAuthenticated) navigate('/login', { state: { from: `/items/${itemId}` } })
+                        else toast('Report flow coming in a future update.', {
+                          icon: <Flag className="w-5 h-5 text-red-500" aria-hidden />,
+                        })
+                      }}
+                      className="text-xs text-slate-400 hover:text-red-500 dark:hover:text-red-400
+                                 transition-colors text-center py-1 inline-flex items-center justify-center gap-1 w-full"
+                    >
+                      <Flag className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                      Flag / Report this post
+                    </button>
+                  )}
                 </>
               )}
 
               {/* Owner actions */}
               {isOwner && (
                 <div className="flex flex-col gap-2">
+                  {ownerMatch?.status === 'active' && (
+                    <Link
+                      to={`/verify-ownership/${ownerMatch.id}`}
+                      className="btn-primary w-full py-3 text-sm font-semibold text-center"
+                    >
+                      Verify Ownership
+                    </Link>
+                  )}
+                  {isLost && ownerMatch?.status === 'pending_review' && (
+                    <p className="text-sm text-center text-amber-700 dark:text-amber-300 py-3 px-4
+                                  rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200/80
+                                  dark:border-amber-800/50">
+                      Your claim on a matched found item is currently under admin review.
+                    </p>
+                  )}
+                  {!isLost && matchAsFoundOwnerOnFound?.status === 'pending_review' && (
+                    <p className="text-sm text-center text-amber-700 dark:text-amber-300 py-3 px-4
+                                  rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200/80
+                                  dark:border-amber-800/50">
+                      Admin is currently reviewing an ownership claim for this item.
+                    </p>
+                  )}
+                  {ownerMatch?.status === 'verified' && ownerMatch.conversation_id && (
+                    <Link
+                      to={`/messages/${ownerMatch.conversation_id}`}
+                      className="btn-primary w-full py-3 text-sm font-semibold text-center"
+                    >
+                      Open Chat
+                    </Link>
+                  )}
                   {item.extensions_used < 2 && days > 0 && days <= 7 && (
                     <button
                       onClick={() => extendMutation.mutate(itemId)}
                       disabled={extendMutation.isPending}
                       className="btn-secondary w-full py-2.5 text-sm"
                     >
-                      {extendMutation.isPending ? 'Extending…' : '⏳ Extend Post (+30 days)'}
+                      {extendMutation.isPending ? 'Extending…' : (
+                        <span className="inline-flex items-center justify-center gap-2">
+                          <Clock className="w-4 h-4 shrink-0" aria-hidden />
+                          Extend Post (+30 days)
+                        </span>
+                      )}
                     </button>
                   )}
                   <button
@@ -412,7 +571,12 @@ export default function ItemDetailPage() {
                                hover:bg-red-50 dark:border-red-800 dark:text-red-400
                                dark:hover:bg-red-900/20 transition-colors disabled:opacity-50"
                   >
-                    {deleteMutation.isPending ? 'Removing…' : '🗑 Remove Post'}
+                    {deleteMutation.isPending ? 'Removing…' : (
+                      <span className="inline-flex items-center justify-center gap-2">
+                        <Trash2 className="w-4 h-4 shrink-0" aria-hidden />
+                        Remove Post
+                      </span>
+                    )}
                   </button>
                   <p className="text-xs text-center text-slate-400 dark:text-slate-500">
                     Mark as Returned and Claim flows coming in future updates.
