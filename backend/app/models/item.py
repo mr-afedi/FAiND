@@ -62,9 +62,7 @@ class Item(Base):
         nullable=False
     )
 
-    # Descriptions — private_description is AES-256-GCM encrypted (Section 6)
     public_description: Mapped[str] = mapped_column(Text, nullable=False)
-    private_description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Location — FK for zone + denormalized label/coords for display
     location_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -86,6 +84,11 @@ class Item(Base):
 
     # Admin flags
     admin_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Path B bridge found item — hidden from public browse (Feature J)
+    path_b_bridge: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Path C bridge lost item — hidden from public browse (V4.3)
+    path_c_bridge: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
@@ -109,10 +112,10 @@ class Item(Base):
 
 class ItemHiddenQuestion(Base):
     """
-    Verification Q&A for found items (Section 7, V4.2).
-    Set by the finder; answered by the owner during Path A/C verification.
-    Both question and answer are AES-256-GCM encrypted.
-    Immutable after submission — no UPDATE permitted in service layer.
+    Verification Q&A on lost and found items (V4.3).
+    Lost: owner sets questions; finder answers in Path B.
+    Found: finder sets questions; owner answers in Path A/C.
+    Both fields AES-256-GCM encrypted; answers never returned in API responses.
     """
     __tablename__ = "item_hidden_questions"
 

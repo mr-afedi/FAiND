@@ -5,3 +5,8 @@
 - [x] Feature D — Found Item Reporting
 - [x] Feature E — Trust System
 - [x] Feature F — Homepage + Browse Pages
+- [x] Feature G — AI Matching Engine
+- [x] Feature H — Notifications + Web Push
+- [x] Feature I — Ownership Verification Path A
+- [x] Feature J — Path B I Have This Item
+- [x] Feature K — Path C This Might Be Mine

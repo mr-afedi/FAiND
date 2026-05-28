@@ -9,13 +9,14 @@ from typing import Optional
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.item import Item, ItemHiddenQuestion, ItemStatus, ItemType
-from app.models.campus_zone import CampusZone
 from app.models.user import User, AccountStatus
 from app.models.potential_match import PotentialMatch, PotentialMatchStatus
 import app.services.trust_service as trust_service
 import app.services.matching_service as matching_service
 from app.schemas.item import (
+    CheckHiddenAnswersRequest,
     CreateLostItemRequest,
+    HiddenQuestionInput,
     UpdateLostItemRequest,
     LostItemListItem,
     LostItemListResponse,
@@ -33,6 +34,8 @@ from app.schemas.item import (
     HomepageResponse,
 )
 from app.utils.encryption import encrypt
+from app.utils.location_utils import _resolve_location
+from app.services import path_b_service, path_c_service
 
 # Lost items are active for 45 days (Section 21.1)
 _LOST_ITEM_ACTIVE_DAYS = 45
@@ -40,27 +43,34 @@ _LOST_ITEM_ACTIVE_DAYS = 45
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _resolve_location(
-    db: Session, location_id: Optional[uuid.UUID], university_id: uuid.UUID
-) -> tuple[str, Optional[float], Optional[float], Optional[uuid.UUID]]:
-    """Return (label, lat, lng, zone_id) for the chosen zone, or raise ValueError."""
-    if location_id is None:
-        return ("Unknown Location", None, None, None)
+_OBVIOUS_ANSWER_THRESHOLD = 0.65
 
-    zone: Optional[CampusZone] = (
-        db.query(CampusZone)
-        .filter(CampusZone.id == location_id, CampusZone.university_id == university_id, CampusZone.is_active == True)
-        .first()
-    )
-    if not zone:
-        raise ValueError("Campus zone not found or does not belong to your university")
-    return (zone.name, zone.latitude, zone.longitude, zone.id)
+
+def hidden_answer_warnings(
+    public_description: str,
+    hidden_questions: list[HiddenQuestionInput],
+) -> list[str]:
+    """Warn when a hidden answer is too similar to the public description (V4.3 §6.1)."""
+    warnings: list[str] = []
+    for idx, q in enumerate(hidden_questions, start=1):
+        sim = matching_service.description_similarity(public_description, q.answer)
+        if sim >= _OBVIOUS_ANSWER_THRESHOLD:
+            warnings.append(
+                f"Question {idx}: This answer might be too obvious. "
+                "Consider asking something more specific."
+            )
+    return warnings
+
+
+def check_hidden_answers(payload: CheckHiddenAnswersRequest) -> list[str]:
+    return hidden_answer_warnings(payload.public_description, payload.hidden_questions)
 
 
 def _build_owner_response(
     item: Item,
     db: Session,
     override_status: Optional[ItemStatus] = None,
+    warnings: Optional[list[str]] = None,
 ) -> LostItemOwnerResponse:
     poster = ItemPosterSummary(
         id=item.posted_by.id,
@@ -83,6 +93,7 @@ def _build_owner_response(
         extensions_used=item.extensions_used,
         created_at=item.created_at,
         posted_by=poster,
+        warnings=warnings or [],
     )
 
 
@@ -90,6 +101,10 @@ def _build_public_response(
     item: Item,
     mask_match_status: bool = False,
     show_as_matched: bool = False,
+    viewer_path_b_status: Optional[str] = None,
+    viewer_path_b_conversation_id: Optional[uuid.UUID] = None,
+    viewer_path_c_status: Optional[str] = None,
+    viewer_path_c_conversation_id: Optional[uuid.UUID] = None,
 ) -> LostItemPublicResponse:
     poster = ItemPosterSummary(
         id=item.posted_by.id,
@@ -105,11 +120,15 @@ def _build_public_response(
     elif mask_match_status and item.status in (
         ItemStatus.POTENTIAL_MATCH,
         ItemStatus.UNDER_VERIFICATION,
+        ItemStatus.UNDER_DISPUTE,
     ):
         visible_status = (
             ItemStatus.OPEN if item.item_type == ItemType.LOST else ItemStatus.FOUND
         )
-    elif item.status == ItemStatus.UNDER_VERIFICATION:
+    elif item.status in (
+        ItemStatus.UNDER_VERIFICATION,
+        ItemStatus.UNDER_DISPUTE,
+    ):
         visible_status = (
             ItemStatus.OPEN if item.item_type == ItemType.LOST else ItemStatus.FOUND
         )
@@ -130,6 +149,10 @@ def _build_public_response(
         extensions_used=item.extensions_used,
         created_at=item.created_at,
         posted_by=poster,
+        viewer_path_b_status=viewer_path_b_status,
+        viewer_path_b_conversation_id=viewer_path_b_conversation_id,
+        viewer_path_c_status=viewer_path_c_status,
+        viewer_path_c_conversation_id=viewer_path_c_conversation_id,
     )
 
 
@@ -159,6 +182,8 @@ def create_lost_item(
 
     expiry = datetime.now(timezone.utc) + timedelta(days=_LOST_ITEM_ACTIVE_DAYS)
 
+    warnings = hidden_answer_warnings(payload.public_description, payload.hidden_questions)
+
     item = Item(
         university_id=current_user.university_id,
         posted_by_id=current_user.id,
@@ -166,7 +191,6 @@ def create_lost_item(
         status=ItemStatus.OPEN,
         category=payload.category,
         public_description=payload.public_description,
-        private_description=encrypt(payload.private_description),
         location_id=zone_id,
         location_label=label,
         location_lat=lat,
@@ -176,8 +200,19 @@ def create_lost_item(
         expiry_date=expiry,
     )
     db.add(item)
+    db.flush()
+
+    for idx, q in enumerate(payload.hidden_questions, start=1):
+        db.add(
+            ItemHiddenQuestion(
+                item_id=item.id,
+                question=encrypt(q.question),
+                answer=encrypt(q.answer),
+                position=idx,
+            )
+        )
+
     db.commit()
-    db.refresh(item)
 
     item = (
         db.query(Item)
@@ -185,7 +220,7 @@ def create_lost_item(
         .filter(Item.id == item.id)
         .one()
     )
-    return _build_owner_response(item, db)
+    return _build_owner_response(item, db, warnings=warnings)
 
 
 # ── Read ─────────────────────────────────────────────────────────────────────
@@ -250,10 +285,29 @@ def get_item_detail(
     # Non-owner: party members always see POTENTIAL_MATCH badge (even on found items
     # whose DB status is "found"). Everyone else gets the masked status.
     is_party = current_user is not None and current_user.id in party_ids
+
+    path_b_status: Optional[str] = None
+    path_b_conv: Optional[uuid.UUID] = None
+    path_c_status: Optional[str] = None
+    path_c_conv: Optional[uuid.UUID] = None
+    if current_user and item.posted_by_id != current_user.id:
+        if item.item_type == ItemType.LOST:
+            path_b_status, path_b_conv = path_b_service.resolve_viewer_path_b_status(
+                db, current_user.id, item.id
+            )
+        elif item.item_type == ItemType.FOUND:
+            path_c_status, path_c_conv = path_c_service.resolve_viewer_path_c_status(
+                db, current_user.id, item.id
+            )
+
     return _build_public_response(
         item,
         show_as_matched=is_party and active_match is not None,
         mask_match_status=not is_party,
+        viewer_path_b_status=path_b_status,
+        viewer_path_b_conversation_id=path_b_conv,
+        viewer_path_c_status=path_c_status,
+        viewer_path_c_conversation_id=path_c_conv,
     )
 
 
@@ -268,6 +322,7 @@ def list_my_lost_items(
         .filter(
             Item.posted_by_id == current_user.id,
             Item.item_type == ItemType.LOST,
+            Item.path_c_bridge == False,
             Item.status.notin_([ItemStatus.ARCHIVED, ItemStatus.CLOSED]),
         )
         .order_by(Item.created_at.desc())
@@ -443,7 +498,6 @@ def create_found_item(
         status=ItemStatus.FOUND,
         category=payload.category,
         public_description=payload.public_description,
-        private_description=None,
         location_id=zone_id,
         location_label=label,
         location_lat=lat,
@@ -490,6 +544,8 @@ def list_my_found_items(
         .filter(
             Item.posted_by_id == current_user.id,
             Item.item_type == ItemType.FOUND,
+            Item.path_b_bridge == False,
+            Item.path_c_bridge == False,
             Item.status.notin_([ItemStatus.ARCHIVED, ItemStatus.CLOSED]),
         )
         .order_by(Item.created_at.desc())
@@ -640,6 +696,8 @@ _VISIBLE_STATUSES = [
 def _build_browse_card(
     item: Item,
     viewer_matched_ids: Optional[set] = None,
+    path_b_viewer: Optional[tuple[str | None, uuid.UUID | None]] = None,
+    path_c_viewer: Optional[tuple[str | None, uuid.UUID | None]] = None,
 ) -> BrowseItemCard:
     poster = BrowseItemPoster(
         id=item.posted_by.id,
@@ -653,12 +711,18 @@ def _build_browse_card(
     is_party = bool(viewer_matched_ids and item.id in viewer_matched_ids)
     if is_party:
         public_status = ItemStatus.POTENTIAL_MATCH
-    elif item.status in (ItemStatus.POTENTIAL_MATCH, ItemStatus.UNDER_VERIFICATION):
+    elif item.status in (
+        ItemStatus.POTENTIAL_MATCH,
+        ItemStatus.UNDER_VERIFICATION,
+        ItemStatus.UNDER_DISPUTE,
+    ):
         public_status = (
             ItemStatus.OPEN if item.item_type == ItemType.LOST else ItemStatus.FOUND
         )
     else:
         public_status = item.status
+    pb_status, pb_conv = path_b_viewer if path_b_viewer else (None, None)
+    pc_status, pc_conv = path_c_viewer if path_c_viewer else (None, None)
     return BrowseItemCard(
         id=item.id,
         item_type=item.item_type,
@@ -671,6 +735,10 @@ def _build_browse_card(
         created_at=item.created_at,
         updated_at=item.updated_at,
         posted_by=poster,
+        viewer_path_b_status=pb_status if item.item_type == ItemType.LOST else None,
+        viewer_path_b_conversation_id=pb_conv if item.item_type == ItemType.LOST else None,
+        viewer_path_c_status=pc_status if item.item_type == ItemType.FOUND else None,
+        viewer_path_c_conversation_id=pc_conv if item.item_type == ItemType.FOUND else None,
     )
 
 
@@ -687,6 +755,7 @@ def browse_items(
     skip: int = 0,
     limit: int = 20,
     viewer_matched_ids: Optional[set] = None,
+    viewer_id: Optional[uuid.UUID] = None,
 ) -> BrowseListResponse:
     """
     Public browse feed — no auth required.
@@ -698,6 +767,8 @@ def browse_items(
         .options(joinedload(Item.posted_by))
         .filter(
             Item.status.in_(_VISIBLE_STATUSES),
+            Item.path_b_bridge == False,
+            Item.path_c_bridge == False,
             User.status == AccountStatus.ACTIVE,
         )
     )
@@ -727,15 +798,36 @@ def browse_items(
         query = query.order_by(Item.created_at.desc())
 
     items = query.offset(skip).limit(limit).all()
+
+    path_b_map: dict[uuid.UUID, tuple[str | None, uuid.UUID | None]] = {}
+    path_c_map: dict[uuid.UUID, tuple[str | None, uuid.UUID | None]] = {}
+    if viewer_id:
+        lost_ids = [i.id for i in items if i.item_type == ItemType.LOST and i.posted_by_id != viewer_id]
+        found_ids = [i.id for i in items if i.item_type == ItemType.FOUND and i.posted_by_id != viewer_id]
+        path_b_map = path_b_service.resolve_viewer_path_b_statuses_batch(db, viewer_id, lost_ids)
+        path_c_map = path_c_service.resolve_viewer_path_c_statuses_batch(db, viewer_id, found_ids)
+
     return BrowseListResponse(
-        items=[_build_browse_card(i, viewer_matched_ids) for i in items],
+        items=[
+            _build_browse_card(
+                i,
+                viewer_matched_ids,
+                path_b_map.get(i.id),
+                path_c_map.get(i.id),
+            )
+            for i in items
+        ],
         total=total,
         skip=skip,
         limit=limit,
     )
 
 
-def get_homepage_data(db: Session, viewer_matched_ids: Optional[set] = None) -> HomepageResponse:
+def get_homepage_data(
+    db: Session,
+    viewer_matched_ids: Optional[set] = None,
+    viewer_id: Optional[uuid.UUID] = None,
+) -> HomepageResponse:
     """
     Lightweight homepage snapshot — 5 latest lost, 5 latest found,
     anonymous resolved items from past 7 days (Section 24.1).
@@ -748,6 +840,8 @@ def get_homepage_data(db: Session, viewer_matched_ids: Optional[set] = None) -> 
             .filter(
                 Item.item_type == type_filter,
                 Item.status.in_(_VISIBLE_STATUSES),
+                Item.path_b_bridge == False,
+                Item.path_c_bridge == False,
                 User.status == AccountStatus.ACTIVE,
             )
             .order_by(Item.created_at.desc())
@@ -775,8 +869,26 @@ def get_homepage_data(db: Session, viewer_matched_ids: Optional[set] = None) -> 
         for i in returned_rows
     ]
 
+    path_b_map: dict[uuid.UUID, tuple[str | None, uuid.UUID | None]] = {}
+    path_c_map: dict[uuid.UUID, tuple[str | None, uuid.UUID | None]] = {}
+    if viewer_id:
+        lost_ids = [i.id for i in latest_lost if i.posted_by_id != viewer_id]
+        found_ids = [i.id for i in latest_found if i.posted_by_id != viewer_id]
+        path_b_map = path_b_service.resolve_viewer_path_b_statuses_batch(
+            db, viewer_id, lost_ids
+        )
+        path_c_map = path_c_service.resolve_viewer_path_c_statuses_batch(
+            db, viewer_id, found_ids
+        )
+
     return HomepageResponse(
-        latest_lost=[_build_browse_card(i, viewer_matched_ids) for i in latest_lost],
-        latest_found=[_build_browse_card(i, viewer_matched_ids) for i in latest_found],
+        latest_lost=[
+            _build_browse_card(i, viewer_matched_ids, path_b_map.get(i.id))
+            for i in latest_lost
+        ],
+        latest_found=[
+            _build_browse_card(i, viewer_matched_ids, None, path_c_map.get(i.id))
+            for i in latest_found
+        ],
         recently_returned=recently_returned,
     )

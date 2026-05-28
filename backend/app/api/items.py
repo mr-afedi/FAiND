@@ -16,6 +16,8 @@ from app.models.user import User
 from app.models.item import ItemType, ItemCategory, ItemStatus
 from app.models.campus_zone import CampusZone
 from app.schemas.item import (
+    CheckHiddenAnswersRequest,
+    CheckHiddenAnswersResponse,
     CreateLostItemRequest,
     UpdateLostItemRequest,
     LostItemPublicResponse,
@@ -78,7 +80,8 @@ def get_homepage_data(
     Authenticated users see POTENTIAL_MATCH status on items they are a party to.
     """
     matched_ids = get_matched_item_ids(db, current_user.id) if current_user else None
-    return item_service.get_homepage_data(db, viewer_matched_ids=matched_ids)
+    viewer_id = current_user.id if current_user else None
+    return item_service.get_homepage_data(db, viewer_matched_ids=matched_ids, viewer_id=viewer_id)
 
 
 @router.get("/public", response_model=BrowseListResponse)
@@ -105,6 +108,7 @@ def browse_public(
     parsed_cats     = [ItemCategory(c) for c in category]    if category     else None
     parsed_statuses = [ItemStatus(s)    for s in item_status] if item_status else None
     matched_ids     = get_matched_item_ids(db, current_user.id) if current_user else None
+    viewer_id       = current_user.id if current_user else None
 
     return item_service.browse_items(
         db,
@@ -119,10 +123,20 @@ def browse_public(
         skip=skip,
         limit=limit,
         viewer_matched_ids=matched_ids,
+        viewer_id=viewer_id,
     )
 
 
 # ── Lost Item CRUD ────────────────────────────────────────────────────────────
+
+@router.post("/lost/check-hidden-answers", response_model=CheckHiddenAnswersResponse)
+def check_lost_hidden_answers(
+    payload: CheckHiddenAnswersRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Warn when hidden answers are too similar to the public description (V4.3)."""
+    return CheckHiddenAnswersResponse(warnings=item_service.check_hidden_answers(payload))
+
 
 @router.post("/lost", response_model=LostItemOwnerResponse, status_code=status.HTTP_201_CREATED)
 def create_lost_item(

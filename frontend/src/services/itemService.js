@@ -62,6 +62,12 @@ export async function createLostItem(payload) {
   return data
 }
 
+/** V4.3 — warn when hidden answers are too similar to public description */
+export async function checkLostHiddenAnswers(payload) {
+  const { data } = await api.post('/items/lost/check-hidden-answers', payload)
+  return data
+}
+
 export async function getMyLostItems({ skip = 0, limit = 20 } = {}) {
   const { data } = await api.get('/items/my/lost', { params: { skip, limit } })
   return data

@@ -44,12 +44,15 @@ class HiddenQuestionPublic(BaseModel):
 # ── Lost Item Request ────────────────────────────────────────────────────────
 
 class CreateLostItemRequest(BaseModel):
+    """
+    Lost items: owner sets hidden verification Q&A (Section 6, V4.3).
+    """
     category: ItemCategory
     public_description: str
-    private_description: str
     location_id: Optional[uuid.UUID] = None
     date_occurred: datetime
     image_urls: list[str] = []
+    hidden_questions: list[HiddenQuestionInput]
 
     @field_validator("public_description")
     @classmethod
@@ -61,14 +64,13 @@ class CreateLostItemRequest(BaseModel):
             raise ValueError("Public description must be 1000 characters or fewer")
         return v
 
-    @field_validator("private_description")
+    @field_validator("hidden_questions")
     @classmethod
-    def private_desc_valid(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("Private description is required")
-        if len(v) > 1000:
-            raise ValueError("Private description must be 1000 characters or fewer")
+    def validate_questions(cls, v: list[HiddenQuestionInput]) -> list[HiddenQuestionInput]:
+        if len(v) < 2:
+            raise ValueError("At least 2 hidden verification questions are required")
+        if len(v) > 3:
+            raise ValueError("Maximum 3 hidden verification questions allowed")
         return v
 
     @field_validator("image_urls")
@@ -142,14 +144,31 @@ class LostItemPublicResponse(BaseModel):
     extensions_used: int
     created_at: datetime
     posted_by: ItemPosterSummary
+    # Path B claim state for the requesting user (lost items only; Section V4.3)
+    viewer_path_b_status: Optional[str] = None  # under_review | approved | rejected | exhausted
+    viewer_path_b_conversation_id: Optional[uuid.UUID] = None
+    viewer_path_c_status: Optional[str] = None  # under_review | approved | exhausted
+    viewer_path_c_conversation_id: Optional[uuid.UUID] = None
 
     model_config = {"from_attributes": True}
 
 
 class LostItemOwnerResponse(LostItemPublicResponse):
-    """Extended response returned ONLY to the item's owner (V4.2: no hidden Q&A on lost items)."""
+    """Extended response for the item owner; hidden answers are never included."""
+
+    warnings: list[str] = []
 
     model_config = {"from_attributes": True}
+
+
+class CheckHiddenAnswersRequest(BaseModel):
+    """Optional pre-submit check for obvious hidden answers (V4.3 §6.1)."""
+    public_description: str
+    hidden_questions: list[HiddenQuestionInput]
+
+
+class CheckHiddenAnswersResponse(BaseModel):
+    warnings: list[str] = []
 
 
 class LostItemListItem(BaseModel):
@@ -309,6 +328,10 @@ class BrowseItemCard(BaseModel):
     created_at: datetime
     updated_at: datetime
     posted_by: BrowseItemPoster
+    viewer_path_b_status: Optional[str] = None
+    viewer_path_b_conversation_id: Optional[uuid.UUID] = None
+    viewer_path_c_status: Optional[str] = None
+    viewer_path_c_conversation_id: Optional[uuid.UUID] = None
 
     model_config = {"from_attributes": True}
 

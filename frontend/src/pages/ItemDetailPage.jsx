@@ -8,8 +8,8 @@
  *   - Images → fullscreen lightbox
  *
  * Logged-in (not owner):
- *   - "I Have This Item" (lost items) → placeholder (Feature I/J)
- *   - "This Might Be Mine" (found items) → placeholder (Feature K)
+ *   - "I Have This Item" (lost items) → Path B (Feature J)
+ *   - "This Might Be Mine" (found items) → Path C (Feature K)
  *   - "Flag / Report Post" → placeholder (Feature P)
  *
  * Owner only:
@@ -40,7 +40,6 @@ import {
   Flag,
   Clock,
   Trash2,
-  Sparkles,
 } from '../components/icons'
 
 const STATUS_PILL = {
@@ -155,9 +154,13 @@ export default function ItemDetailPage() {
       && ['active', 'pending_review', 'verified'].includes(m.status),
   )
 
+  const isPathCMatch = (m) => m?.score_breakdown?.path === 'path_c'
+  const isPathBMatch = (m) => m?.score_breakdown?.path === 'path_b'
+
   const matchAsLostOwnerOnFound = matchData?.matches?.find(
     (m) => m.user_role === 'lost_owner'
       && String(m.found_item?.id) === String(itemId)
+      && !isPathCMatch(m)
       && ['active', 'pending_review', 'verified'].includes(m.status),
   )
 
@@ -170,12 +173,14 @@ export default function ItemDetailPage() {
   const matchAsFoundOwnerOnLost = matchData?.matches?.find(
     (m) => m.user_role === 'found_owner'
       && String(m.lost_item?.id) === String(itemId)
+      && !isPathBMatch(m)
       && ['active', 'pending_review', 'verified'].includes(m.status),
   )
 
-  const isFinderUser = Boolean(
-    matchData?.matches?.some((m) => m.user_role === 'found_owner'),
-  )
+  const pathBStatus = item?.viewer_path_b_status ?? null
+  const pathBConversationId = item?.viewer_path_b_conversation_id ?? null
+  const pathCStatus = item?.viewer_path_c_status ?? null
+  const pathCConversationId = item?.viewer_path_c_conversation_id ?? null
 
   const foundOwnerMatchedOnLost = Boolean(matchAsFoundOwnerOnLost)
   const foundOwnerViewingMatchedLost = Boolean(
@@ -194,15 +199,16 @@ export default function ItemDetailPage() {
   const isClaimable = item && !NON_CLAIMABLE_STATUSES.includes(item.status)
 
   const lostOwnerViewingMatchedFound = Boolean(matchAsLostOwnerOnFound)
+  const MASKED_PUBLIC_STATUSES = ['potential_match', 'under_verification', 'under_dispute']
   const displayStatus = item && (
-    !isOwner && item.status === 'under_verification'
+    !isOwner && MASKED_PUBLIC_STATUSES.includes(item.status)
       ? (isLost ? 'open' : 'found')
       : item.status
   )
   const showStatusBadge = item && (
     isOwner
       ? STATUS_PILL[item.status]
-      : item.status !== 'under_verification' && STATUS_PILL[displayStatus]
+      : !MASKED_PUBLIC_STATUSES.includes(item.status) && STATUS_PILL[displayStatus]
   )
 
   const deleteMutation = useMutation({
@@ -229,14 +235,18 @@ export default function ItemDetailPage() {
     deleteMutation.mutate(itemId)
   }
 
-  function handleClaimAction() {
+  function handleClaimAction(path) {
     if (!isAuthenticated) {
       navigate('/login', { state: { from: `/items/${itemId}` } })
       return
     }
-    toast('Claim flows are coming in a future update.', {
-      icon: <Sparkles className="w-5 h-5 text-brand-500" aria-hidden />,
-    })
+    if (path === 'b' && isLost) {
+      navigate(`/i-have-this-item/${itemId}`)
+      return
+    }
+    if (path === 'c' && !isLost) {
+      navigate(`/this-might-be-mine/${itemId}`)
+    }
   }
 
   if (isLoading) {
@@ -455,46 +465,140 @@ export default function ItemDetailPage() {
                       Open Chat
                     </Link>
                   )}
-                  {foundOwnerViewingMatchedLost && (
+                  {foundOwnerViewingMatchedLost && !pathBStatus && (
                     <p className="text-sm text-center text-violet-700 dark:text-violet-300 py-3 px-4
                                   rounded-xl bg-violet-50 dark:bg-violet-900/20 border border-violet-200/80
                                   dark:border-violet-800/50">
                       An ownership claim is in progress for your matched item
                     </p>
                   )}
-                  {foundOwnerChatOpenOnLost && (
+                  {foundOwnerChatOpenOnLost && !pathBStatus && (
                     <p className="text-sm text-center text-green-700 dark:text-green-300 py-3 px-4
                                   rounded-xl bg-green-50 dark:bg-green-900/20 border border-green-200/80
                                   dark:border-green-800/50">
                       You are matched with this item and chat is open
                     </p>
                   )}
-                  {foundOwnerMatchedOnLost && matchAsFoundOwnerOnLost?.status === 'active' && (
+                  {foundOwnerMatchedOnLost && matchAsFoundOwnerOnLost?.status === 'active' && !pathBStatus && (
                     <p className="text-sm text-center text-slate-600 dark:text-slate-400 py-3 px-4
                                   rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80
                                   dark:border-slate-700/50">
                       You are already matched with this item. Waiting for the owner to verify ownership.
                     </p>
                   )}
-                  {!lostOwnerViewingMatchedFound && !foundOwnerMatchedOnLost && isClaimable && isLost && (
+                  {pathBStatus === 'rejected' && (
+                    <div className="flex flex-col gap-2">
+                      <p className="text-sm text-center text-red-700 dark:text-red-300 py-3 px-4
+                                    rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200/80
+                                    dark:border-red-800/50">
+                        Claim not approved
+                      </p>
+                      <button
+                        onClick={() => handleClaimAction('b')}
+                        className="btn-secondary w-full py-3 text-sm font-semibold"
+                      >
+                        Try Again
+                      </button>
+                    </div>
+                  )}
+                  {pathBStatus === 'under_review' && (
+                    <p className="text-sm text-center text-amber-700 dark:text-amber-300 py-3 px-4
+                                  rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200/80
+                                  dark:border-amber-800/50">
+                      Your claim is under admin review
+                    </p>
+                  )}
+                  {pathBStatus === 'approved' && (
+                    <div className="flex flex-col gap-2">
+                      <p className="text-sm text-center text-green-700 dark:text-green-300 py-3 px-4
+                                    rounded-xl bg-green-50 dark:bg-green-900/20 border border-green-200/80
+                                    dark:border-green-800/50">
+                        Your claim was approved — chat is open
+                      </p>
+                      {pathBConversationId && (
+                        <Link
+                          to={`/messages/${pathBConversationId}`}
+                          className="btn-primary w-full py-3 text-sm font-semibold text-center"
+                        >
+                          Open Chat
+                        </Link>
+                      )}
+                    </div>
+                  )}
+                  {pathBStatus === 'exhausted' && (
+                    <p className="text-sm text-center text-slate-600 dark:text-slate-400 py-3 px-4
+                                  rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80
+                                  dark:border-slate-700/50">
+                      You have reached the maximum number of attempts for this item
+                    </p>
+                  )}
+                  {!lostOwnerViewingMatchedFound && !pathBStatus && !foundOwnerMatchedOnLost && isClaimable && isLost && (
                     <button
-                      onClick={handleClaimAction}
+                      onClick={() => handleClaimAction('b')}
                       className="btn-primary w-full py-3 text-sm font-semibold inline-flex items-center justify-center gap-2"
                     >
                       <Hand className="w-4 h-4 shrink-0" aria-hidden />
                       I Have This Item
                     </button>
                   )}
-                  {!lostOwnerViewingMatchedFound && !foundOwnerMatchedOnLost && isClaimable && !isLost && !isFinderUser && (
+                  {pathCStatus === 'rejected' && (
+                    <div className="flex flex-col gap-2">
+                      <p className="text-sm text-center text-red-700 dark:text-red-300 py-3 px-4
+                                    rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200/80
+                                    dark:border-red-800/50">
+                        Claim not approved
+                      </p>
+                      <button
+                        onClick={() => handleClaimAction('c')}
+                        className="btn-secondary w-full py-3 text-sm font-semibold"
+                      >
+                        Try Again
+                      </button>
+                    </div>
+                  )}
+                  {pathCStatus === 'under_review' && (
+                    <p className="text-sm text-center text-amber-700 dark:text-amber-300 py-3 px-4
+                                  rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200/80
+                                  dark:border-amber-800/50">
+                      Your claim is under admin review
+                    </p>
+                  )}
+                  {pathCStatus === 'approved' && (
+                    <div className="flex flex-col gap-2">
+                      <p className="text-sm text-center text-green-700 dark:text-green-300 py-3 px-4
+                                    rounded-xl bg-green-50 dark:bg-green-900/20 border border-green-200/80
+                                    dark:border-green-800/50">
+                        Your claim was approved — chat is open
+                      </p>
+                      {pathCConversationId && (
+                        <Link
+                          to={`/messages/${pathCConversationId}`}
+                          className="btn-primary w-full py-3 text-sm font-semibold text-center"
+                        >
+                          Open Chat
+                        </Link>
+                      )}
+                    </div>
+                  )}
+                  {pathCStatus === 'exhausted' && (
+                    <p className="text-sm text-center text-slate-600 dark:text-slate-400 py-3 px-4
+                                  rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80
+                                  dark:border-slate-700/50">
+                      You have reached the maximum number of attempts for this item
+                    </p>
+                  )}
+                  {!lostOwnerViewingMatchedFound && !pathCStatus && !pathBStatus && !foundOwnerMatchedOnLost
+                    && isClaimable && !isLost && (
                     <button
-                      onClick={handleClaimAction}
+                      onClick={() => handleClaimAction('c')}
                       className="btn-primary w-full py-3 text-sm font-semibold inline-flex items-center justify-center gap-2"
                     >
                       <ScanSearch className="w-4 h-4 shrink-0" aria-hidden />
                       This Might Be Mine
                     </button>
                   )}
-                  {!lostOwnerViewingMatchedFound && !foundOwnerMatchedOnLost && !isClaimable && item && (
+                  {!lostOwnerViewingMatchedFound && !pathCStatus && !pathBStatus && !foundOwnerMatchedOnLost
+                    && !isClaimable && item && (
                     <p className="text-xs text-center text-slate-400 dark:text-slate-500 py-2">
                       This item is currently {formatStatus(displayStatus)} and cannot accept new claims.
                     </p>

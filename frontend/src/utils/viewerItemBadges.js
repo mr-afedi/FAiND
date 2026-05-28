@@ -26,14 +26,40 @@ export function matchChatUnlocked(match) {
   )
 }
 
+const PATH_B_BADGE = {
+  under_review: 'Your claim is under admin review',
+  approved: 'Your claim was approved — chat is open',
+  rejected: 'Claim not approved',
+  exhausted: 'You have reached the maximum number of attempts for this item',
+}
+
+const PATH_C_BADGE = {
+  under_review: 'Your claim is under admin review',
+  approved: 'Your claim was approved — chat is open',
+  rejected: 'Claim not approved',
+  exhausted: 'You have reached the maximum number of attempts for this item',
+}
+
 export function getViewerBadge(item, userId, matches, scope = {}) {
-  if (!userId || !item?.id || !matches?.length) return null
+  if (!userId || !item?.id) return null
 
   const { homepage = false, browse = false } = scope
   const itemId = item.id
   const isLost = item.item_type === 'lost'
   const isFound = item.item_type === 'found'
   const isOwner = idEq(item.posted_by?.id, userId)
+
+  // Path B claim state from API (homepage + browse + detail cards)
+  if (isLost && !isOwner && item.viewer_path_b_status) {
+    return PATH_B_BADGE[item.viewer_path_b_status] || null
+  }
+
+  // Path C claim state from API
+  if (isFound && !isOwner && item.viewer_path_c_status) {
+    return PATH_C_BADGE[item.viewer_path_c_status] || null
+  }
+
+  if (!matches?.length) return null
 
   // Chat unlocked — homepage only, each party on their own item card
   if (homepage && isLost && isOwner) {

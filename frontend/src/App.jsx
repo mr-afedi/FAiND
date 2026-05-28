@@ -18,6 +18,8 @@ import FoundItemsPage      from './pages/FoundItemsPage'
 import ItemDetailPage      from './pages/ItemDetailPage'
 import ItemUnavailablePage from './pages/ItemUnavailablePage'
 import VerifyOwnershipPage from './pages/VerifyOwnershipPage'
+import IHaveThisItemPage   from './pages/IHaveThisItemPage'
+import ThisMightBeMinePage  from './pages/ThisMightBeMinePage'
 import MessagesPage        from './pages/MessagesPage'
 
 // Guards
@@ -80,6 +82,16 @@ export default function App() {
         {/* Feature I — Path A ownership verification */}
         <Route path="/verify-ownership/:matchId" element={
           <ProtectedRoute><VerifyOwnershipPage /></ProtectedRoute>
+        } />
+
+        {/* Feature J — Path B I Have This Item */}
+        <Route path="/i-have-this-item/:lostItemId" element={
+          <ProtectedRoute><IHaveThisItemPage /></ProtectedRoute>
+        } />
+
+        {/* Feature K — Path C This Might Be Mine */}
+        <Route path="/this-might-be-mine/:foundItemId" element={
+          <ProtectedRoute><ThisMightBeMinePage /></ProtectedRoute>
         } />
         <Route path="/messages/:conversationId" element={
           <ProtectedRoute><MessagesPage /></ProtectedRoute>

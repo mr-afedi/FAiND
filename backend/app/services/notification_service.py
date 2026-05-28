@@ -170,6 +170,166 @@ def notify_verification_review(
     _fire_push(db, user_id, "FAiND", body, link)
 
 
+def notify_claim_received(
+    db: Session,
+    lost_owner_id: uuid.UUID,
+    lost_item_id: uuid.UUID,
+    claim_id: uuid.UUID,
+) -> None:
+    """Path B (V4.3): generic claim notice — no finder identity or answers revealed."""
+    body = (
+        "Someone claims to have found your item. We are verifying their claim."
+    )
+    link = f"/items/{lost_item_id}"
+    create_notification(
+        db,
+        lost_owner_id,
+        NotificationType.CLAIM_RECEIVED,
+        title="New claim on your lost item",
+        body=body,
+        link=link,
+        reference_id=claim_id,
+    )
+    db.flush()
+    _fire_push(db, lost_owner_id, "FAiND", body, link)
+
+
+def notify_claim_under_review(
+    db: Session,
+    lost_owner_id: uuid.UUID,
+    lost_item_id: uuid.UUID,
+    claim_id: uuid.UUID,
+) -> None:
+    """Path B claim in admin review range — inform lost owner."""
+    body = "A finder claim on your lost item needs admin review."
+    link = f"/items/{lost_item_id}"
+    create_notification(
+        db,
+        lost_owner_id,
+        NotificationType.VERIFICATION_REVIEW,
+        title="Claim under review",
+        body=body,
+        link=link,
+        reference_id=claim_id,
+    )
+    db.flush()
+    _fire_push(db, lost_owner_id, "FAiND", body, link)
+
+
+def notify_path_b_failed(
+    db: Session,
+    user_id: uuid.UUID,
+    lost_item_id: uuid.UUID,
+    attempts_remaining: int,
+) -> None:
+    """Path B claim rejected — notify finder only."""
+    body = (
+        f"Your I Have This Item claim was not approved. "
+        f"{attempts_remaining} attempt(s) remaining for this item."
+    )
+    link = f"/i-have-this-item/{lost_item_id}"
+    create_notification(
+        db,
+        user_id,
+        NotificationType.VERIFICATION_FAILED,
+        title="Claim not approved",
+        body=body,
+        link=link,
+        reference_id=lost_item_id,
+    )
+    db.flush()
+    _fire_push(db, user_id, "FAiND", body, link)
+
+
+def notify_path_c_claim_received(
+    db: Session,
+    finder_id: uuid.UUID,
+    found_item_id: uuid.UUID,
+    claim_id: uuid.UUID,
+) -> None:
+    """Path C — finder notified when someone claims their found item."""
+    body = (
+        "Someone believes your found item may be theirs. "
+        "We are verifying their claim."
+    )
+    link = f"/items/{found_item_id}"
+    create_notification(
+        db,
+        finder_id,
+        NotificationType.CLAIM_RECEIVED,
+        title="New claim on your found item",
+        body=body,
+        link=link,
+        reference_id=claim_id,
+    )
+    db.flush()
+    _fire_push(db, finder_id, "FAiND", body, link)
+
+
+def notify_path_c_under_review(
+    db: Session,
+    claimant_id: uuid.UUID,
+    finder_id: uuid.UUID,
+    found_item_id: uuid.UUID,
+    match_id: uuid.UUID,
+) -> None:
+    """Path C — both parties notified when claim is in admin review."""
+    claimant_body = (
+        "Your This Might Be Mine claim is under admin review. "
+        "We'll notify you when a decision is made."
+    )
+    finder_body = (
+        "A claim on your found item is under admin review. "
+        "We'll notify you when a decision is made."
+    )
+    claimant_link = f"/this-might-be-mine/{found_item_id}"
+    finder_link = f"/items/{found_item_id}"
+    create_notification(
+        db, claimant_id, NotificationType.VERIFICATION_REVIEW,
+        title="Claim under review", body=claimant_body,
+        link=claimant_link, reference_id=match_id,
+    )
+    create_notification(
+        db, finder_id, NotificationType.VERIFICATION_REVIEW,
+        title="Claim under review", body=finder_body,
+        link=finder_link, reference_id=match_id,
+    )
+    db.flush()
+    _fire_push(db, claimant_id, "FAiND", claimant_body, claimant_link)
+    _fire_push(db, finder_id, "FAiND", finder_body, finder_link)
+
+
+def notify_path_c_rejected(
+    db: Session,
+    claimant_id: uuid.UUID,
+    finder_id: uuid.UUID,
+    found_item_id: uuid.UUID,
+    match_id: uuid.UUID,
+    attempts_remaining: int,
+) -> None:
+    """Path C — both parties notified when claim is rejected."""
+    claimant_body = (
+        f"Your This Might Be Mine claim was not approved. "
+        f"{attempts_remaining} attempt(s) remaining for this item."
+    )
+    finder_body = "A claim on your found item was not approved."
+    claimant_link = f"/this-might-be-mine/{found_item_id}"
+    finder_link = f"/items/{found_item_id}"
+    create_notification(
+        db, claimant_id, NotificationType.VERIFICATION_FAILED,
+        title="Claim not approved", body=claimant_body,
+        link=claimant_link, reference_id=match_id,
+    )
+    create_notification(
+        db, finder_id, NotificationType.VERIFICATION_FAILED,
+        title="Claim not approved", body=finder_body,
+        link=finder_link, reference_id=match_id,
+    )
+    db.flush()
+    _fire_push(db, claimant_id, "FAiND", claimant_body, claimant_link)
+    _fire_push(db, finder_id, "FAiND", finder_body, finder_link)
+
+
 def notify_potential_match_expired(
     db: Session,
     owner_id: uuid.UUID,

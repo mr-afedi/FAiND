@@ -1,30 +1,23 @@
 /**
- * Feature C — Report Lost Item (Section 6, Section 30.5, Section 30.6)
+ * Feature C — Report Lost Item (Section 6, V4.3)
  *
- * Fields:
- *   - Category dropdown
- *   - Public description (visible to all)
- *   - Private description (encrypted at rest, used only for verification)
- *   - Campus location (dropdown from /items/campus-zones)
- *   - Date and time lost
- *   - Images (optional, max 2, Cloudinary upload)
- *   V4.2: hidden verification Q&A are on found items only (finder sets them).
+ * Public description, 2–3 hidden verification Q&A, location, date, optional images.
  */
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import NavBar from '../components/NavBar'
+import OwnerVerificationQuestions from '../components/OwnerVerificationQuestions'
 import {
   createLostItem,
+  checkLostHiddenAnswers,
   uploadImageToCloudinary,
 } from '../services/itemService'
 import { invalidateAfterItemCreate } from '../utils/queryCache'
-import { useCampusZones } from '../hooks/useCampusZones'
+import { useCampusZones, createInitialQuestions, newQuestion } from '../hooks/useCampusZones'
 import { X } from '../components/icons'
 import CategoryPicker from '../components/CategoryPicker'
-
-// ── Reusable form field wrapper ───────────────────────────────────────────────
 
 function Field({ label, hint, required, children }) {
   return (
@@ -39,16 +32,16 @@ function Field({ label, hint, required, children }) {
   )
 }
 
-// ── Image preview / upload row ────────────────────────────────────────────────
-
 function ImageUploadSlot({ index, preview, uploading, onSelect, onRemove }) {
   const inputRef = useRef(null)
   return (
-    <div className="relative w-28 h-28 rounded-xl border-2 border-dashed
+    <div
+      className="relative w-28 h-28 rounded-xl border-2 border-dashed
                     border-slate-300 dark:border-slate-600 overflow-hidden
                     flex items-center justify-center cursor-pointer
                     hover:border-brand-400 transition-colors"
-         onClick={() => !preview && inputRef.current?.click()}>
+      onClick={() => !preview && inputRef.current?.click()}
+    >
       <input
         ref={inputRef}
         type="file"
@@ -84,47 +77,98 @@ function ImageUploadSlot({ index, preview, uploading, onSelect, onRemove }) {
   )
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
+function mapWarningsToQuestions(questions, warnings) {
+  const map = {}
+  questions.forEach((q, idx) => {
+    const prefix = `Question ${idx + 1}:`
+    const match = warnings.find((w) => w.startsWith(prefix))
+    if (match) map[q.id] = match
+  })
+  return map
+}
 
 export default function ReportLostPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
-  // form state
-  const [category, setCategory]             = useState('')
-  const [publicDesc, setPublicDesc]         = useState('')
-  const [privateDesc, setPrivateDesc]       = useState('')
-  const [locationId, setLocationId]         = useState('')
-  const [dateLost, setDateLost]             = useState('')
-  const [timeLost, setTimeLost]             = useState('')
-  const [images, setImages]                 = useState([null, null])        // null | { file, preview, url }
-  const [uploadingIdx, setUploadingIdx]     = useState(null)
+  const [category, setCategory] = useState('')
+  const [publicDesc, setPublicDesc] = useState('')
+  const [locationId, setLocationId] = useState('')
+  const [dateLost, setDateLost] = useState('')
+  const [timeLost, setTimeLost] = useState('')
+  const [images, setImages] = useState([null, null])
+  const [uploadingIdx, setUploadingIdx] = useState(null)
+  const [questions, setQuestions] = useState(() => createInitialQuestions(2))
+  const [answerWarnings, setAnswerWarnings] = useState({})
 
   const todayMax = useMemo(() => new Date().toISOString().split('T')[0], [])
-
   const { zones, zonesLoading } = useCampusZones()
-
-  // Submit mutation
-  // Guard against double-submit (e.g. rapid double-click or Enter key bounce)
   const submittingRef = useRef(false)
+
+  const refreshWarnings = useCallback(async () => {
+    const filled = questions.filter((q) => q.question.trim() && q.answer.trim())
+    if (!publicDesc.trim() || filled.length < 2) {
+      setAnswerWarnings({})
+      return
+    }
+    try {
+      const { warnings } = await checkLostHiddenAnswers({
+        public_description: publicDesc.trim(),
+        hidden_questions: filled.map((q) => ({
+          question: q.question.trim(),
+          answer: q.answer.trim(),
+        })),
+      })
+      setAnswerWarnings(mapWarningsToQuestions(questions, warnings || []))
+    } catch {
+      /* non-blocking */
+    }
+  }, [publicDesc, questions])
+
+  useEffect(() => {
+    const t = setTimeout(refreshWarnings, 400)
+    return () => clearTimeout(t)
+  }, [refreshWarnings])
+
+  function handleQuestionChange(id, field, value) {
+    setQuestions((prev) =>
+      prev.map((q) => (q.id === id ? { ...q, [field]: value } : q)),
+    )
+  }
+
+  function handleAddQuestion() {
+    if (questions.length >= 3) return
+    setQuestions((prev) => [...prev, newQuestion()])
+  }
+
+  function handleRemoveQuestion(id) {
+    if (questions.length <= 2) return
+    setQuestions((prev) => prev.filter((q) => q.id !== id))
+    setAnswerWarnings((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+  }
 
   const { mutate: submit, isPending } = useMutation({
     mutationFn: createLostItem,
-    onSuccess: () => {
+    onSuccess: (data) => {
       invalidateAfterItemCreate(queryClient, { type: 'lost' })
+      if (data.warnings?.length) {
+        data.warnings.forEach((w) => toast(w, { icon: '⚠️', duration: 6000 }))
+      }
       toast.success('Lost item reported successfully!')
       navigate('/dashboard')
     },
     onError: (err) => {
-      const msg = err.response?.data?.detail || 'Failed to submit report. Please try again.'
-      toast.error(msg)
+      toast.error(err.response?.data?.detail || 'Failed to submit report. Please try again.')
     },
     onSettled: () => {
       submittingRef.current = false
     },
   })
 
-  // ── Image upload handler ────────────────────────────────────────────────────
   async function handleImageSelect(file, idx) {
     const ALLOWED = ['image/jpeg', 'image/png', 'image/webp']
     if (!ALLOWED.includes(file.type)) {
@@ -135,7 +179,6 @@ export default function ReportLostPage() {
       toast.error('Image must be 5 MB or smaller')
       return
     }
-    // local preview immediately
     const preview = URL.createObjectURL(file)
     setImages((prev) => {
       const next = [...prev]
@@ -171,32 +214,34 @@ export default function ReportLostPage() {
     })
   }
 
-  // ── Submit ──────────────────────────────────────────────────────────────────
   async function handleSubmit(e) {
     e.preventDefault()
-
-    // Hard guard — prevents double-submit regardless of button state
     if (submittingRef.current || isPending) return
     submittingRef.current = true
 
-    // client-side validation
-    if (!category)          { submittingRef.current = false; return toast.error('Please select a category') }
-    if (!publicDesc.trim()) { submittingRef.current = false; return toast.error('Public description is required') }
-    if (!privateDesc.trim()){ submittingRef.current = false; return toast.error('Private description is required') }
-    if (!dateLost)          { submittingRef.current = false; return toast.error('Date lost is required') }
-
-    // check any upload still in progress
+    if (!category) {
+      submittingRef.current = false
+      return toast.error('Please select a category')
+    }
+    if (!publicDesc.trim()) {
+      submittingRef.current = false
+      return toast.error('Public description is required')
+    }
+    if (!dateLost) {
+      submittingRef.current = false
+      return toast.error('Date lost is required')
+    }
+    const validQs = questions.filter((q) => q.question.trim() && q.answer.trim())
+    if (validQs.length < 2) {
+      submittingRef.current = false
+      return toast.error('Please provide at least 2 verification questions with answers')
+    }
     if (uploadingIdx !== null) {
       submittingRef.current = false
       return toast.error('Please wait for the image to finish uploading')
     }
 
-    // collect uploaded image URLs (skip nulls and images still uploading)
-    const imageUrls = images
-      .filter((img) => img?.url)
-      .map((img) => img.url)
-
-    // build datetime from date + time inputs
+    const imageUrls = images.filter((img) => img?.url).map((img) => img.url)
     const dateOccurred = timeLost
       ? `${dateLost}T${timeLost}:00`
       : `${dateLost}T00:00:00`
@@ -204,36 +249,35 @@ export default function ReportLostPage() {
     submit({
       category,
       public_description: publicDesc.trim(),
-      private_description: privateDesc.trim(),
       location_id: locationId || null,
       date_occurred: dateOccurred,
       image_urls: imageUrls,
+      hidden_questions: validQs.map((q) => ({
+        question: q.question.trim(),
+        answer: q.answer.trim(),
+      })),
     })
   }
 
-  // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       <NavBar />
 
       <div className="max-w-2xl mx-auto px-4 py-10">
-        {/* Header */}
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
             Report a Lost Item
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            Fill in the details below. Private fields are encrypted and only used to verify ownership — they are never shown to anyone.
+            Your hidden questions help verify someone who finds your item. Answers are encrypted
+            and never shown to anyone after you submit.
           </p>
         </div>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-7">
-
-          {/* ── Item details ── */}
           <div className="glass p-6 relative z-[1] overflow-visible">
             <h2 className="section-heading mb-5">Item Details</h2>
             <div className="flex flex-col gap-5">
-
               <Field label="Category" required hint="Choose the category that best matches your item.">
                 <CategoryPicker value={category} onChange={setCategory} />
               </Field>
@@ -254,31 +298,20 @@ export default function ReportLostPage() {
                 />
                 <span className="text-xs text-slate-400 text-right">{publicDesc.length}/1000</span>
               </Field>
-
-              <Field
-                label="Private Description"
-                hint="Include specific details only the real owner would know. This is encrypted and never shown to anyone — it's used only to verify your ownership."
-                required
-              >
-                <textarea
-                  value={privateDesc}
-                  onChange={(e) => setPrivateDesc(e.target.value)}
-                  rows={3}
-                  maxLength={1000}
-                  placeholder="e.g. Has a small crack on the back bottom-right corner, wallpaper is a photo of my dog"
-                  className="input-field resize-none"
-                  required
-                />
-                <span className="text-xs text-slate-400 text-right">{privateDesc.length}/1000</span>
-              </Field>
             </div>
           </div>
 
-          {/* ── Location & Date ── */}
+          <OwnerVerificationQuestions
+            questions={questions}
+            onChange={handleQuestionChange}
+            onAdd={handleAddQuestion}
+            onRemove={handleRemoveQuestion}
+            answerWarnings={answerWarnings}
+          />
+
           <div className="glass p-6">
             <h2 className="section-heading mb-5">Where & When</h2>
             <div className="flex flex-col gap-5">
-
               <Field label="Campus Location">
                 {zonesLoading ? (
                   <div className="input-field text-slate-400">Loading zones…</div>
@@ -319,7 +352,6 @@ export default function ReportLostPage() {
             </div>
           </div>
 
-          {/* ── Images ── */}
           <div className="glass p-6">
             <h2 className="section-heading mb-1">Photos</h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mb-5">
@@ -339,7 +371,6 @@ export default function ReportLostPage() {
             </div>
           </div>
 
-          {/* ── Actions ── */}
           <div className="flex gap-3 justify-end">
             <button
               type="button"

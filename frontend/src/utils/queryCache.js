@@ -22,6 +22,38 @@ export function invalidateAfterItemChange(queryClient, itemId) {
   }
 }
 
+export function invalidateAfterPathC(queryClient, { foundItemId, matchId } = {}) {
+  queryClient.invalidateQueries({ queryKey: ['my-matches'] })
+  queryClient.invalidateQueries({ queryKey: ['my-matches-for-item'] })
+  queryClient.invalidateQueries({ queryKey: ['homepage'] })
+  queryClient.invalidateQueries({ queryKey: ['browse'] })
+  queryClient.invalidateQueries({ queryKey: ['path-c-form', foundItemId] })
+  if (foundItemId) {
+    queryClient.invalidateQueries({ queryKey: ['item', foundItemId] })
+  }
+  queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
+  queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
+  if (matchId) {
+    queryClient.invalidateQueries({ queryKey: ['path-a-form', matchId] })
+  }
+}
+
+export function invalidateAfterPathB(queryClient, { lostItemId, matchId } = {}) {
+  queryClient.invalidateQueries({ queryKey: ['my-matches'] })
+  queryClient.invalidateQueries({ queryKey: ['my-matches-for-item'] })
+  queryClient.invalidateQueries({ queryKey: ['homepage'] })
+  queryClient.invalidateQueries({ queryKey: ['browse'] })
+  queryClient.invalidateQueries({ queryKey: ['path-b-form', lostItemId] })
+  if (lostItemId) {
+    queryClient.invalidateQueries({ queryKey: ['item', lostItemId] })
+  }
+  queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
+  queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
+  if (matchId) {
+    queryClient.invalidateQueries({ queryKey: ['path-a-form', matchId] })
+  }
+}
+
 export function invalidateAfterVerification(queryClient, { lostItemId, foundItemId, matchId } = {}) {
   queryClient.invalidateQueries({ queryKey: ['my-matches'] })
   queryClient.invalidateQueries({ queryKey: ['my-matches-for-item'] })
