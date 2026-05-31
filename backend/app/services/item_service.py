@@ -9,7 +9,10 @@ from typing import Optional
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.item import Item, ItemHiddenQuestion, ItemStatus, ItemType
+from app.models.item_return import ItemReturn
+from app.schemas.item import PublicReturnedItem, PublicReturnedListResponse
 from app.models.user import User, AccountStatus
+from app.models.university import University
 from app.models.potential_match import PotentialMatch, PotentialMatchStatus
 import app.services.trust_service as trust_service
 import app.services.matching_service as matching_service
@@ -30,7 +33,6 @@ from app.schemas.item import (
     BrowseItemPoster,
     BrowseItemCard,
     BrowseListResponse,
-    RecentlyReturnedItem,
     HomepageResponse,
 )
 from app.utils.encryption import encrypt
@@ -853,21 +855,17 @@ def get_homepage_data(
     latest_found = _active_query(ItemType.FOUND)
 
     seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
-    returned_rows = (
-        db.query(Item)
-        .filter(
-            Item.status == ItemStatus.RETURNED,
-            Item.updated_at >= seven_days_ago,
-        )
-        .order_by(Item.updated_at.desc())
-        .limit(10)
-        .all()
+    returned_filter = (
+        ItemReturn.returned_at.isnot(None),
+        ItemReturn.returned_at >= seven_days_ago,
+        Item.status == ItemStatus.RETURNED,
     )
-
-    recently_returned = [
-        RecentlyReturnedItem(id=i.id, category=i.category, returned_at=i.updated_at)
-        for i in returned_rows
-    ]
+    recently_returned_count = (
+        db.query(ItemReturn)
+        .join(Item, Item.id == ItemReturn.lost_item_id)
+        .filter(*returned_filter)
+        .count()
+    )
 
     path_b_map: dict[uuid.UUID, tuple[str | None, uuid.UUID | None]] = {}
     path_c_map: dict[uuid.UUID, tuple[str | None, uuid.UUID | None]] = {}
@@ -890,5 +888,51 @@ def get_homepage_data(
             _build_browse_card(i, viewer_matched_ids, None, path_c_map.get(i.id))
             for i in latest_found
         ],
-        recently_returned=recently_returned,
+        recently_returned_count=recently_returned_count,
     )
+
+
+def _public_returned_item_name(item: Item) -> str:
+    desc = (item.public_description or "").strip()
+    if desc:
+        return desc[:80] + ("…" if len(desc) > 80 else "")
+    cat = item.category.value.replace("_", " ").title()
+    return cat
+
+
+def list_public_returned_items(
+    db: Session,
+    *,
+    skip: int = 0,
+    limit: int = 50,
+) -> PublicReturnedListResponse:
+    """Anonymous returned items for the past 7 days (Section 16.6)."""
+    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    base = (
+        db.query(ItemReturn, Item, University)
+        .join(Item, Item.id == ItemReturn.lost_item_id)
+        .join(University, University.id == ItemReturn.university_id)
+        .filter(
+            ItemReturn.returned_at.isnot(None),
+            ItemReturn.returned_at >= seven_days_ago,
+            Item.status == ItemStatus.RETURNED,
+        )
+    )
+    total = base.count()
+    rows = (
+        base.order_by(ItemReturn.returned_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    items = [
+        PublicReturnedItem(
+            id=item.id,
+            category=item.category,
+            item_name=_public_returned_item_name(item),
+            returned_at=record.returned_at,
+            university_short_name=university.short_name,
+        )
+        for record, item, university in rows
+    ]
+    return PublicReturnedListResponse(items=items, total=total)

@@ -1,6 +1,7 @@
 import { Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import PushPromptBanner from './components/PushPromptBanner'
+import ChatRealtimeBridge from './components/ChatRealtimeBridge'
 
 // Pages
 import HomePage            from './pages/HomePage'
@@ -15,12 +16,15 @@ import ReportLostPage      from './pages/ReportLostPage'
 import ReportFoundPage     from './pages/ReportFoundPage'
 import LostItemsPage       from './pages/LostItemsPage'
 import FoundItemsPage      from './pages/FoundItemsPage'
+import ReturnedItemsPage   from './pages/ReturnedItemsPage'
 import ItemDetailPage      from './pages/ItemDetailPage'
 import ItemUnavailablePage from './pages/ItemUnavailablePage'
 import VerifyOwnershipPage from './pages/VerifyOwnershipPage'
 import IHaveThisItemPage   from './pages/IHaveThisItemPage'
 import ThisMightBeMinePage  from './pages/ThisMightBeMinePage'
 import MessagesPage        from './pages/MessagesPage'
+import ReturnConfirmPage   from './pages/ReturnConfirmPage'
+import ReturnedDetailPage  from './pages/ReturnedDetailPage'
 
 // Guards
 import ProtectedRoute from './components/ProtectedRoute'
@@ -50,6 +54,7 @@ export default function App() {
     <AuthProvider>
       {/* Global overlays — available on every page */}
       <PushPromptBanner />
+      <ChatRealtimeBridge />
       <Routes>
         {/* Public */}
         <Route path="/" element={<HomePage />} />
@@ -76,6 +81,7 @@ export default function App() {
         {/* Feature F — public browse pages + item detail */}
         <Route path="/lost"        element={<LostItemsPage />} />
         <Route path="/found"       element={<FoundItemsPage />} />
+        <Route path="/returned"    element={<ReturnedItemsPage />} />
         <Route path="/items/:itemId" element={<ItemDetailPage />} />
         <Route path="/item-unavailable" element={<ItemUnavailablePage />} />
 
@@ -93,8 +99,19 @@ export default function App() {
         <Route path="/this-might-be-mine/:foundItemId" element={
           <ProtectedRoute><ThisMightBeMinePage /></ProtectedRoute>
         } />
+        <Route path="/messages" element={
+          <ProtectedRoute><MessagesPage /></ProtectedRoute>
+        } />
         <Route path="/messages/:conversationId" element={
           <ProtectedRoute><MessagesPage /></ProtectedRoute>
+        } />
+
+        {/* Feature M — Return confirmation */}
+        <Route path="/returns/confirm/:matchId" element={
+          <ProtectedRoute><ReturnConfirmPage /></ProtectedRoute>
+        } />
+        <Route path="/returns/:returnId" element={
+          <ProtectedRoute><ReturnedDetailPage /></ProtectedRoute>
         } />
 
         {/* Fallback — unmatched routes show a not-found page, never silently redirect */}

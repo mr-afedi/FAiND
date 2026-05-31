@@ -350,6 +350,139 @@ def notify_potential_match_expired(
     _fire_push(db, owner_id, "FAiND", body, link)
 
 
+def notify_item_returned(
+    db: Session,
+    *,
+    lost_owner_id: uuid.UUID,
+    found_owner_id: uuid.UUID,
+    return_id: uuid.UUID,
+    lost_item_id: uuid.UUID,
+    found_item_id: uuid.UUID,
+) -> None:
+    """Section 15.3 — both parties notified when return is confirmed."""
+    owner_body = "You confirmed receipt — this item is now marked as returned."
+    finder_body = "The owner confirmed the return. You earned +5 trust points!"
+    owner_link = f"/returns/{return_id}"
+    finder_link = f"/returns/{return_id}"
+
+    create_notification(
+        db,
+        lost_owner_id,
+        NotificationType.ITEM_RETURNED,
+        title="Item returned",
+        body=owner_body,
+        link=owner_link,
+        reference_id=return_id,
+    )
+    create_notification(
+        db,
+        found_owner_id,
+        NotificationType.ITEM_RETURNED,
+        title="Successful return",
+        body=finder_body,
+        link=finder_link,
+        reference_id=return_id,
+    )
+    db.flush()
+    _fire_push(db, lost_owner_id, "FAiND", owner_body, owner_link)
+    _fire_push(db, found_owner_id, "FAiND", finder_body, finder_link)
+
+
+def notify_finder_handed_over(
+    db: Session,
+    *,
+    owner_id: uuid.UUID,
+    match_id: uuid.UUID,
+    return_id: uuid.UUID,
+) -> None:
+    """Section 15.1 — finder confirmed handover; owner must confirm receipt."""
+    body = (
+        "The finder confirmed they handed over your item. "
+        "Please confirm receipt when you have it."
+    )
+    link = f"/returns/confirm/{match_id}"
+    create_notification(
+        db,
+        owner_id,
+        NotificationType.GENERAL,
+        title="Confirm item receipt",
+        body=body,
+        link=link,
+        reference_id=return_id,
+    )
+    db.flush()
+    _fire_push(db, owner_id, "FAiND", body, link)
+
+
+def notify_return_disputed(
+    db: Session,
+    *,
+    record,
+    filed_by_id: uuid.UUID,
+    tip_frozen: bool,
+) -> None:
+    """Section 16.4 — both parties notified when a return is disputed."""
+    link = f"/returns/{record.id}"
+    filer_is_owner = filed_by_id == record.lost_owner_id
+    other_id = record.found_owner_id if filer_is_owner else record.lost_owner_id
+    filer_body = (
+        "Your dispute was submitted. An admin will review this return."
+        + (" Any appreciation payment is frozen pending review." if tip_frozen else "")
+    )
+    other_body = (
+        "The other party disputed this return. An admin will review the case."
+        + (" Any tip on this return is frozen pending review." if tip_frozen else "")
+    )
+    create_notification(
+        db,
+        filed_by_id,
+        NotificationType.GENERAL,
+        title="Return dispute submitted",
+        body=filer_body,
+        link=link,
+        reference_id=record.id,
+    )
+    create_notification(
+        db,
+        other_id,
+        NotificationType.GENERAL,
+        title="Return disputed",
+        body=other_body,
+        link=link,
+        reference_id=record.id,
+    )
+    db.flush()
+    _fire_push(db, filed_by_id, "FAiND", filer_body, link)
+    _fire_push(db, other_id, "FAiND", other_body, link)
+
+
+def notify_return_receipt_reminder(
+    db: Session,
+    *,
+    owner_id: uuid.UUID,
+    match_id: uuid.UUID,
+    return_id: uuid.UUID,
+    lost_item_id: uuid.UUID,
+) -> None:
+    """Section 15.1 — finder confirmed but owner has not within 7 days."""
+    body = (
+        "The finder marked your item as handed over. "
+        "Please confirm receipt when you have it."
+    )
+    link = f"/returns/confirm/{match_id}"
+    create_notification(
+        db,
+        owner_id,
+        NotificationType.GENERAL,
+        title="Confirm your item receipt",
+        body=body,
+        link=link,
+        reference_id=return_id,
+    )
+    db.flush()
+    _fire_push(db, owner_id, "FAiND", body, link)
+
+
 def get_unread_count(db: Session, user_id: uuid.UUID) -> int:
     return (
         db.query(Notification)

@@ -24,6 +24,7 @@ import NavBar from '../components/NavBar'
 import ItemUnavailablePage from './ItemUnavailablePage'
 import { getItemDetail, deleteItem, deleteFoundItem, extendItem, extendFoundItem } from '../services/itemService'
 import { getMyMatches } from '../services/matchService'
+import { getReturnStatusByItem } from '../services/returnService'
 import { invalidateAfterItemChange } from '../utils/queryCache'
 import { matchVerificationInProgress, matchChatUnlocked } from '../utils/viewerItemBadges'
 import {
@@ -181,6 +182,29 @@ export default function ItemDetailPage() {
   const pathBConversationId = item?.viewer_path_b_conversation_id ?? null
   const pathCStatus = item?.viewer_path_c_status ?? null
   const pathCConversationId = item?.viewer_path_c_conversation_id ?? null
+
+  const verifiedReturnMatch = matchData?.matches?.find(
+    (m) => m.status === 'verified' && m.conversation_id && (
+      (m.user_role === 'lost_owner' && (
+        String(m.lost_item?.id) === String(itemId)
+        || String(m.found_item?.id) === String(itemId)
+      ))
+      || (m.user_role === 'found_owner' && (
+        String(m.found_item?.id) === String(itemId)
+        || String(m.lost_item?.id) === String(itemId)
+      ))
+    ),
+  )
+
+  const { data: returnStatus } = useQuery({
+    queryKey: ['return-status-by-item', itemId],
+    queryFn: () => getReturnStatusByItem(itemId),
+    enabled: Boolean(isAuthenticated && verifiedReturnMatch && item?.status !== 'returned'),
+    refetchInterval: (query) => {
+      const data = query.state.data
+      return data && !data.is_complete ? 5000 : false
+    },
+  })
 
   const foundOwnerMatchedOnLost = Boolean(matchAsFoundOwnerOnLost)
   const foundOwnerViewingMatchedLost = Boolean(
@@ -621,6 +645,41 @@ export default function ItemDetailPage() {
                 </>
               )}
 
+              {/* Return confirmation — both match parties (Section 15) */}
+              {isAuthenticated && verifiedReturnMatch && item?.status !== 'returned' && (
+                <div className="flex flex-col gap-2">
+                  {returnStatus?.awaiting_owner_receipt && (
+                    <p className="text-sm text-center text-amber-700 dark:text-amber-300 py-3 px-4
+                                  rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200/80
+                                  dark:border-amber-800/50">
+                      The finder handed over your item. Please confirm you received it.
+                    </p>
+                  )}
+                  {returnStatus?.awaiting_finder_handover && returnStatus?.viewer_role === 'found_owner' && (
+                    <p className="text-sm text-center text-slate-600 dark:text-slate-400 py-3 px-4
+                                  rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80
+                                  dark:border-slate-700/50">
+                      The owner confirmed receipt. Confirm when you have handed over the item.
+                    </p>
+                  )}
+                  {returnStatus?.finder_handed_over && returnStatus?.viewer_role === 'found_owner'
+                    && !returnStatus?.is_complete && (
+                    <p className="text-sm text-center text-slate-500 dark:text-slate-400 py-2">
+                      Waiting for the owner to confirm receipt.
+                    </p>
+                  )}
+                  <Link
+                    to={`/returns/confirm/${verifiedReturnMatch.id}`}
+                    className="btn-primary w-full py-3 text-sm font-semibold text-center"
+                  >
+                    <span className="inline-flex items-center justify-center gap-2">
+                      <Hand className="w-4 h-4 shrink-0" aria-hidden />
+                      {returnStatus?.awaiting_owner_receipt ? 'Confirm You Received It' : 'Confirm Return'}
+                    </span>
+                  </Link>
+                </div>
+              )}
+
               {/* Owner actions */}
               {isOwner && (
                 <div className="flex flex-col gap-2">
@@ -646,10 +705,18 @@ export default function ItemDetailPage() {
                       Admin is currently reviewing an ownership claim for this item.
                     </p>
                   )}
+                  {item.status === 'returned' && (
+                    <Link
+                      to="/dashboard?tab=returned"
+                      className="btn-secondary w-full py-3 text-sm font-semibold text-center"
+                    >
+                      View in Returned
+                    </Link>
+                  )}
                   {ownerMatch?.status === 'verified' && ownerMatch.conversation_id && (
                     <Link
                       to={`/messages/${ownerMatch.conversation_id}`}
-                      className="btn-primary w-full py-3 text-sm font-semibold text-center"
+                      className="btn-secondary w-full py-3 text-sm font-semibold text-center"
                     >
                       Open Chat
                     </Link>
@@ -682,9 +749,6 @@ export default function ItemDetailPage() {
                       </span>
                     )}
                   </button>
-                  <p className="text-xs text-center text-slate-400 dark:text-slate-500">
-                    Mark as Returned and Claim flows coming in future updates.
-                  </p>
                 </div>
               )}
             </div>

@@ -15,6 +15,9 @@ from app.api.matches import router as matches_router
 from app.api.notifications import router as notifications_router
 from app.api.push import router as push_router
 from app.api.verification import router as verification_router
+from app.api.messages import router as messages_router
+from app.api.chat_ws import router as chat_ws_router
+from app.api.returns import router as returns_router
 from app.core.scheduler import scheduler_lifespan
 
 settings = get_settings()
@@ -53,6 +56,9 @@ app.include_router(matches_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(push_router, prefix="/api/v1")
 app.include_router(verification_router, prefix="/api/v1")
+app.include_router(messages_router, prefix="/api/v1")
+app.include_router(chat_ws_router, prefix="/api/v1")
+app.include_router(returns_router, prefix="/api/v1")
 
 
 @app.get("/health")

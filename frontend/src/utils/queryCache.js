@@ -75,3 +75,31 @@ export function invalidateAfterProfileUpdate(queryClient) {
   queryClient.invalidateQueries({ queryKey: ['me'] })
   queryClient.invalidateQueries({ queryKey: ['profile'] })
 }
+
+export function invalidateAfterReturn(queryClient, { matchId, returnId, lostItemId, foundItemId } = {}) {
+  queryClient.invalidateQueries({ queryKey: ['my-returns'] })
+  queryClient.invalidateQueries({ queryKey: ['homepage'] })
+  queryClient.invalidateQueries({ queryKey: ['browse'] })
+  queryClient.invalidateQueries({ queryKey: ['my-lost-items'] })
+  queryClient.invalidateQueries({ queryKey: ['my-found-items'] })
+  queryClient.invalidateQueries({ queryKey: ['my-matches'] })
+  queryClient.invalidateQueries({ queryKey: ['my-matches-for-item'] })
+  queryClient.invalidateQueries({ queryKey: ['my-trust-events'] })
+  queryClient.invalidateQueries({ queryKey: ['me'] })
+  queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
+  queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
+  if (matchId) {
+    queryClient.invalidateQueries({ queryKey: ['return-status', matchId] })
+  }
+  if (returnId) {
+    queryClient.invalidateQueries({ queryKey: ['return-detail', returnId] })
+  }
+  if (lostItemId) {
+    queryClient.invalidateQueries({ queryKey: ['item', lostItemId] })
+    queryClient.invalidateQueries({ queryKey: ['return-status-by-item', lostItemId] })
+  }
+  if (foundItemId) {
+    queryClient.invalidateQueries({ queryKey: ['item', foundItemId] })
+    queryClient.invalidateQueries({ queryKey: ['return-status-by-item', foundItemId] })
+  }
+}

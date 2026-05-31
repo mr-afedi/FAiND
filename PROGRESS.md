@@ -10,3 +10,6 @@
 - [x] Feature I — Ownership Verification Path A
 - [x] Feature J — Path B I Have This Item
 - [x] Feature K — Path C This Might Be Mine
+- [x] Feature L — Messages Inbox + Real-Time Chat
+- [x] Feature M — Return Confirmation
+- [x] Feature N — Returned Items

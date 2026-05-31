@@ -29,6 +29,7 @@ from app.schemas.item import (
     FoundItemListResponse,
     BrowseListResponse,
     HomepageResponse,
+    PublicReturnedListResponse,
 )
 import app.services.item_service as item_service
 from app.services.matching_service import run_matching_background, get_matched_item_ids
@@ -82,6 +83,16 @@ def get_homepage_data(
     matched_ids = get_matched_item_ids(db, current_user.id) if current_user else None
     viewer_id = current_user.id if current_user else None
     return item_service.get_homepage_data(db, viewer_matched_ids=matched_ids, viewer_id=viewer_id)
+
+
+@router.get("/public/returned", response_model=PublicReturnedListResponse)
+def list_public_returned(
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """No auth required. Anonymous returned items from the past 7 days (Section 16.6)."""
+    return item_service.list_public_returned_items(db, skip=skip, limit=limit)
 
 
 @router.get("/public", response_model=BrowseListResponse)

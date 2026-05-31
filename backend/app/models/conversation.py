@@ -72,3 +72,6 @@ class Conversation(Base):
     potential_match: Mapped["PotentialMatch"] = relationship(
         "PotentialMatch", foreign_keys=[potential_match_id]
     )
+    messages: Mapped[list["Message"]] = relationship(
+        "Message", back_populates="conversation", order_by="Message.created_at"
+    )

@@ -25,7 +25,12 @@ def _member_since(created_at: datetime) -> str:
     return created_at.strftime("%B %Y")
 
 
-def _build_public_profile(user: User, university: University) -> PublicProfileResponse:
+def _count_returns(db: Session, user_id) -> int:
+    from app.services import return_service
+    return return_service.count_user_returns(db, user_id)
+
+
+def _build_public_profile(db: Session, user: User, university: University) -> PublicProfileResponse:
     return PublicProfileResponse(
         username=user.username,
         full_name=user.full_name,
@@ -33,7 +38,7 @@ def _build_public_profile(user: User, university: University) -> PublicProfileRe
         trust_tier=trust_tier(user.trust_score),
         university_short_name=university.short_name,
         member_since=_member_since(user.created_at),
-        items_returned_count=0,   # Feature M will populate this
+        items_returned_count=_count_returns(db, user.id),
         tips_received_count=0,    # Feature Q will populate this
     )
 
@@ -74,7 +79,7 @@ def get_public_profile(db: Session, username: str) -> PublicProfileResponse:
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     university = db.query(University).filter(University.id == user.university_id).first()
-    return _build_public_profile(user, university)
+    return _build_public_profile(db, user, university)
 
 
 # ── Update profile ────────────────────────────────────────────────────────────

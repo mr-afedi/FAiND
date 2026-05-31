@@ -120,6 +120,11 @@ export async function getHomepageData() {
   return res.data
 }
 
+export async function getPublicReturnedItems({ skip = 0, limit = 50 } = {}) {
+  const res = await api.get('/items/public/returned', { params: { skip, limit } })
+  return res.data
+}
+
 export async function browseItems({
   item_type = null,
   category = [],

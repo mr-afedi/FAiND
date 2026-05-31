@@ -7,6 +7,7 @@ import { getMyLostItems, deleteItem, extendItem,
          getMyFoundItems, deleteFoundItem, extendFoundItem } from '../services/itemService'
 import NavBar from '../components/NavBar'
 import { getMyMatches } from '../services/matchService'
+import { listMyReturns } from '../services/returnService'
 import { invalidateAfterItemChange } from '../utils/queryCache'
 import {
   TRUST_EVENT_META,
@@ -376,18 +377,63 @@ function MatchRow({ match }) {
         </p>
       )}
       {status === 'verified' && match.conversation_id && (
-        <Link
-          to={`/messages/${match.conversation_id}`}
-          className="btn-primary text-sm py-2 w-full sm:w-auto text-center"
-        >
-          Open Chat
-        </Link>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <Link
+            to={`/returns/confirm/${match.id}`}
+            className="btn-primary text-sm py-2 w-full sm:w-auto text-center"
+          >
+            Confirm Return
+          </Link>
+          <Link
+            to={`/messages/${match.conversation_id}`}
+            className="btn-secondary text-sm py-2 w-full sm:w-auto text-center"
+          >
+            Open Chat
+          </Link>
+        </div>
       )}
       {!isLostOwner && status === 'active' && (
         <p className="text-xs text-slate-500 dark:text-slate-400">
           Waiting for the lost item owner to verify ownership. You&apos;ll be notified when chat unlocks.
         </p>
       )}
+    </div>
+  )
+}
+
+// ── Returned tab row (Section 16.8) ───────────────────────────────────────────
+
+function ReturnedRow({ row }) {
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-xl
+                    border border-slate-200/60 dark:border-slate-700/50 bg-white/50 dark:bg-slate-900/30">
+      <div className="flex-1 min-w-0">
+        <p className="font-semibold text-slate-800 dark:text-slate-100 truncate">
+          {row.item_label}
+        </p>
+        <p className="text-xs text-slate-500 mt-0.5">
+          {new Date(row.returned_at).toLocaleDateString()}
+          {' · '}
+          {row.is_owner ? (
+            <>
+              Finder: {row.other_user_display_name} ({row.other_user_trust_tier})
+              {row.appreciation_sent ? ' · Tip sent' : ''}
+            </>
+          ) : (
+            <>
+              Returned to owner
+              {row.appreciation_received ? ' · Appreciated' : ''}
+            </>
+          )}
+          {row.dispute_active ? ' · Under dispute' : ''}
+        </p>
+      </div>
+      <Link
+        to={`/returns/${row.return_id}`}
+        className="btn-secondary text-sm py-2 px-4 text-center shrink-0"
+      >
+        View Details
+      </Link>
     </div>
   )
 }
@@ -437,9 +483,14 @@ export default function DashboardPage() {
     queryFn: getMyMatches,
   })
 
+  const { data: returnsData, isLoading: returnsLoading } = useQuery({
+    queryKey: ['my-returns'],
+    queryFn: listMyReturns,
+  })
+
   useEffect(() => {
     const tab = searchParams.get('tab')
-    if (tab === 'pending') setActiveTab('pending')
+    if (tab === 'pending' || tab === 'returned') setActiveTab(tab)
   }, [searchParams])
 
   const deleteMutation = useMutation({
@@ -583,7 +634,7 @@ export default function DashboardPage() {
           />
           <StatCard
             label="Items Returned"
-            value={0}
+            value={returnsData?.items?.length ?? 0}
             icon={<Check className="w-6 h-6" aria-hidden />}
             sub="All time"
           />
@@ -693,9 +744,21 @@ export default function DashboardPage() {
               )
             )}
             {activeTab === 'returned' && (
-              <EmptyTab
-                message="Items you've successfully returned or received back will appear here."
-              />
+              returnsLoading ? (
+                <div className="flex justify-center py-16">
+                  <div className="w-7 h-7 border-4 border-brand-500 border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : !returnsData?.items?.length ? (
+                <EmptyTab
+                  message="Items you've successfully returned or received back will appear here."
+                />
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {returnsData.items.map((row) => (
+                    <ReturnedRow key={row.return_id} row={row} />
+                  ))}
+                </div>
+              )
             )}
             {activeTab === 'pending' && (
               matchesLoading ? (

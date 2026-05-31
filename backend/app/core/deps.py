@@ -85,6 +85,51 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
+def get_current_user_for_chat(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    """
+    Chat read access for active or suspended users (Section 14.6).
+    Sending still requires ACTIVE status in chat_service.
+    """
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    payload = verify_access_token(credentials.credentials)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    user = get_user_by_id(db, payload.get("sub"))
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found.")
+    if user.status not in (AccountStatus.ACTIVE, AccountStatus.SUSPENDED):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is not active.",
+        )
+    return user
+
+
+def get_user_from_token(db: Session, token: str) -> User:
+    """WebSocket auth — same party rules as REST chat."""
+    payload = verify_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token.")
+    user = get_user_by_id(db, payload.get("sub"))
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found.")
+    if user.status not in (AccountStatus.ACTIVE, AccountStatus.SUSPENDED):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is not active.")
+    return user
+
+
 def require_root_admin(current_user: User = Depends(get_current_user)) -> User:
     if current_user.role != UserRole.ROOT_ADMIN:
         # Return 404 — don't reveal that this route exists

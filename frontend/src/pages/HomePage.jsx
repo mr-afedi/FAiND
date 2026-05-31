@@ -19,11 +19,8 @@ import { getHomepageData } from '../services/itemService'
 import { getMyMatches } from '../services/matchService'
 import { getViewerBadge } from '../utils/viewerItemBadges'
 import {
-  CategoryIcon,
-  getCategoryLabel,
   Search,
   PartyPopper,
-  Check,
   PackageSearch,
   EmptyInboxIcon,
   Bot,
@@ -154,28 +151,24 @@ function EmptyPreview({ message }) {
   )
 }
 
-// ── Recently Returned card (Section 16.6 — anonymous, no names/images) ───────
+// ── Recently Returned teaser (Section 16.6) ───────────────────────────────────
 
-function ReturnedCard({ item }) {
-  const label = getCategoryLabel(item.category)
-  const date = new Date(item.returned_at).toLocaleDateString()
+function RecentlyReturnedTeaser({ count }) {
+  if (!count || count < 1) return null
+  const countLabel = count === 1 ? '1 item' : `${count} items`
   return (
-    <div className="flex items-center gap-3 p-3 rounded-xl
-                    bg-white dark:bg-slate-800/60 border border-slate-200/70
-                    dark:border-slate-700/50">
-      <div className="w-10 h-10 rounded-xl bg-green-100 dark:bg-green-900/30
-                      flex items-center justify-center text-slate-600 dark:text-slate-300 flex-shrink-0">
-        <CategoryIcon category={item.category} className="w-5 h-5" />
-      </div>
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-slate-700 dark:text-slate-300 truncate">{label}</p>
-        <p className="text-xs text-slate-400 dark:text-slate-500">{date}</p>
-      </div>
-      <span className="ml-auto flex-shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full
-                       bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400
-                       inline-flex items-center gap-0.5">
-        Returned <Check className="w-3 h-3" aria-hidden />
-      </span>
+    <div className="py-8 text-center border-t border-slate-200/70 dark:border-slate-800/60">
+      <p className="text-sm text-slate-600 dark:text-slate-400">
+        <span className="font-medium text-emerald-700 dark:text-emerald-400">{countLabel}</span>
+        {' '}successfully returned this week on GCTU campus
+      </p>
+      <Link
+        to="/returned"
+        className="inline-block mt-2 text-sm text-slate-500 dark:text-slate-400
+                   hover:text-brand-600 dark:hover:text-brand-400 transition-colors"
+      >
+        See all returned items →
+      </Link>
     </div>
   )
 }
@@ -369,22 +362,9 @@ export default function HomePage() {
         )}
       </section>
 
-      {/* ── Recently Returned (Section 16.6 — anonymous) ────────────────── */}
-      {homepageData?.recently_returned?.length > 0 && (
-        <section className="page-container pb-12 max-w-5xl">
-          <SectionHeading>
-            <Check className="w-5 h-5 text-green-600 dark:text-green-400" aria-hidden />
-            Recently Returned
-          </SectionHeading>
-          <p className="text-xs text-slate-400 dark:text-slate-500 mb-4">
-            Items successfully reunited with their owners in the past 7 days — names hidden to protect privacy.
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {homepageData.recently_returned.map((item) => (
-              <ReturnedCard key={item.id} item={item} />
-            ))}
-          </div>
-        </section>
+      {/* ── Recently Returned teaser (Section 16.6) ─────────────────────── */}
+      {!isLoading && (
+        <RecentlyReturnedTeaser count={homepageData?.recently_returned_count ?? 0} />
       )}
 
       {/* ── Why FAiND ────────────────────────────────────────────────────── */}

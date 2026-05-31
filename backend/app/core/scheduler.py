@@ -10,9 +10,26 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.core.database import SessionLocal
-from app.services import verification_service
+from app.services import verification_service, return_service
 
 _scheduler: BackgroundScheduler | None = None
+
+
+def _run_return_lifecycle_job() -> None:
+    db = SessionLocal()
+    try:
+        archived = return_service.archive_expired_returned_items(db)
+        reminders = return_service.process_return_reminders(db)
+        if archived or reminders:
+            print(
+                f"[Scheduler] Returns: archived={archived}, reminders/flags={reminders}",
+                flush=True,
+            )
+    except Exception as exc:
+        print(f"[Scheduler] return lifecycle job failed: {exc}", flush=True)
+        db.rollback()
+    finally:
+        db.close()
 
 
 def _run_match_timeout_job() -> None:
@@ -40,9 +57,18 @@ def start_scheduler() -> BackgroundScheduler:
         id="expire_stale_potential_matches",
         replace_existing=True,
     )
+    scheduler.add_job(
+        _run_return_lifecycle_job,
+        trigger=IntervalTrigger(hours=6),
+        id="return_lifecycle",
+        replace_existing=True,
+    )
     scheduler.start()
     _scheduler = scheduler
-    print("[Scheduler] APScheduler started — hourly POTENTIAL_MATCH timeout active", flush=True)
+    print(
+        "[Scheduler] APScheduler started — hourly match timeout, 6h return lifecycle",
+        flush=True,
+    )
     return scheduler
 
 

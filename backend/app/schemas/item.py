@@ -348,11 +348,29 @@ class RecentlyReturnedItem(BaseModel):
     id: uuid.UUID
     category: ItemCategory
     returned_at: datetime
+    university_short_name: str
 
     model_config = {"from_attributes": True}
+
+
+class PublicReturnedItem(BaseModel):
+    """Anonymous returned item for public /returned page (Section 16.6)."""
+    id: uuid.UUID
+    category: ItemCategory
+    item_name: str
+    returned_at: datetime
+    university_short_name: str
+
+    model_config = {"from_attributes": True}
+
+
+class PublicReturnedListResponse(BaseModel):
+    items: list[PublicReturnedItem]
+    total: int
 
 
 class HomepageResponse(BaseModel):
     latest_lost: list[BrowseItemCard]
     latest_found: list[BrowseItemCard]
-    recently_returned: list[RecentlyReturnedItem]
+    recently_returned: list[RecentlyReturnedItem] = []
+    recently_returned_count: int = 0
