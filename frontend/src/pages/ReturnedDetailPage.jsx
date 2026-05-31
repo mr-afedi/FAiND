@@ -13,6 +13,8 @@ import {
 } from '../services/returnService'
 import { invalidateAfterReturn } from '../utils/queryCache'
 import { getCategoryLabel, Check, MapPin, ChevronLeft, AlertTriangle } from '../components/icons'
+import LoadingButton from '../components/LoadingButton'
+import { useSubmitLock } from '../hooks/useSubmitLock'
 
 const METHOD_LABEL = {
   dual_confirm: 'Dual confirmation',
@@ -24,6 +26,8 @@ export default function ReturnedDetailPage() {
   const queryClient = useQueryClient()
   const [disputeOpen, setDisputeOpen] = useState(false)
   const [disputeReason, setDisputeReason] = useState('')
+  const skipLock = useSubmitLock()
+  const disputeLock = useSubmitLock()
 
   const { data: detail, isLoading, isError, refetch } = useQuery({
     queryKey: ['return-detail', returnId],
@@ -48,6 +52,7 @@ export default function ReturnedDetailPage() {
       refetch()
     },
     onError: (err) => toast.error(err.response?.data?.detail || 'Could not skip'),
+    onSettled: () => skipLock.release(),
   })
 
   const disputeMutation = useMutation({
@@ -60,6 +65,7 @@ export default function ReturnedDetailPage() {
       refetch()
     },
     onError: (err) => toast.error(err.response?.data?.detail || 'Could not file dispute'),
+    onSettled: () => disputeLock.release(),
   })
 
   if (isLoading) {
@@ -222,14 +228,18 @@ export default function ReturnedDetailPage() {
               Send Appreciation
             </button>
             {detail.can_skip_appreciation && (
-              <button
-                type="button"
+              <LoadingButton
                 className="btn-secondary w-full py-2.5 text-sm"
-                disabled={skipMutation.isPending}
-                onClick={() => skipMutation.mutate()}
+                loading={skipLock.isSubmitting || skipMutation.isPending}
+                disabled={skipLock.isSubmitting || skipMutation.isPending}
+                loadingLabel="Saving…"
+                onClick={() => {
+                  if (!skipLock.tryAcquire()) return
+                  skipMutation.mutate()
+                }}
               >
-                {skipMutation.isPending ? 'Saving…' : 'Skip for Now'}
-              </button>
+                Skip for Now
+              </LoadingButton>
             )}
           </div>
         )}
@@ -273,15 +283,23 @@ export default function ReturnedDetailPage() {
               >
                 Cancel
               </button>
-              <button
-                type="button"
+              <LoadingButton
                 className="flex-1 py-2 text-sm rounded-xl bg-red-600 text-white hover:bg-red-700
                            disabled:opacity-50"
-                disabled={disputeReason.trim().length < 10 || disputeMutation.isPending}
-                onClick={() => disputeMutation.mutate()}
+                loading={disputeLock.isSubmitting || disputeMutation.isPending}
+                disabled={
+                  disputeReason.trim().length < 10
+                  || disputeLock.isSubmitting
+                  || disputeMutation.isPending
+                }
+                loadingLabel="Submitting…"
+                onClick={() => {
+                  if (!disputeLock.tryAcquire()) return
+                  disputeMutation.mutate()
+                }}
               >
-                {disputeMutation.isPending ? 'Submitting…' : 'Submit Dispute'}
-              </button>
+                Submit Dispute
+              </LoadingButton>
             </div>
           </div>
         )}

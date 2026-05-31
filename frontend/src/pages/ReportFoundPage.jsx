@@ -8,7 +8,7 @@
  *   - Initial status → FOUND (not OPEN)
  *   - Active period: 21 days
  */
-import { useState, useRef, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
@@ -22,6 +22,8 @@ import { invalidateAfterItemCreate } from '../utils/queryCache'
 import { useCampusZones, createInitialQuestions, newQuestion } from '../hooks/useCampusZones'
 import { X, Camera, Plus } from '../components/icons'
 import CategoryPicker from '../components/CategoryPicker'
+import SubmitButton from '../components/SubmitButton'
+import { useSubmitLock } from '../hooks/useSubmitLock'
 
 // ── Reusable field wrapper ────────────────────────────────────────────────────
 
@@ -108,7 +110,7 @@ export default function ReportFoundPage() {
   const [uploadingIdx, setUploadingIdx] = useState(null)
   const [questions, setQuestions]       = useState(() => createInitialQuestions(2))
 
-  const submittingRef = useRef(false)
+  const { isSubmitting, tryAcquire, release } = useSubmitLock()
 
   const todayMax = useMemo(() => new Date().toISOString().split('T')[0], [])
 
@@ -126,7 +128,7 @@ export default function ReportFoundPage() {
       toast.error(msg)
     },
     onSettled: () => {
-      submittingRef.current = false
+      release()
     },
   })
 
@@ -178,23 +180,22 @@ export default function ReportFoundPage() {
   // ── Submit ──────────────────────────────────────────────────────────────────
   function handleSubmit(e) {
     e.preventDefault()
-    if (submittingRef.current || isPending) return
-    submittingRef.current = true
+    if (!tryAcquire()) return
 
-    if (!category)           { submittingRef.current = false; return toast.error('Please select a category') }
-    if (!description.trim()) { submittingRef.current = false; return toast.error('Description is required') }
-    if (!dateFound)          { submittingRef.current = false; return toast.error('Date found is required') }
+    if (!category) { release(); return toast.error('Please select a category') }
+    if (!description.trim()) { release(); return toast.error('Description is required') }
+    if (!dateFound) { release(); return toast.error('Date found is required') }
     if (questions.some((q) => !q.question.trim() || !q.answer.trim())) {
-      submittingRef.current = false
+      release()
       return toast.error('All verification questions and answers must be filled in')
     }
-    if (uploadingIdx !== null){ submittingRef.current = false; return toast.error('Please wait for the image to finish uploading') }
+    if (uploadingIdx !== null) { release(); return toast.error('Please wait for the image to finish uploading') }
 
     const imageUrls = images.filter((img) => img?.url).map((img) => img.url)
 
     // Section 7: submission blocked without at least one photo
     if (imageUrls.length === 0) {
-      submittingRef.current = false
+      release()
       return toast.error('At least one photo is required for found items')
     }
 
@@ -352,22 +353,18 @@ export default function ReportFoundPage() {
               type="button"
               onClick={() => navigate(-1)}
               className="btn-secondary"
-              disabled={isPending}
+              disabled={isSubmitting || isPending}
             >
               Cancel
             </button>
-            <button
-              type="submit"
-              disabled={isPending || uploadingIdx !== null || !hasRequiredImage}
+            <SubmitButton
+              loading={isSubmitting || isPending}
+              disabled={uploadingIdx !== null || !hasRequiredImage}
               className="btn-primary min-w-[140px]"
+              loadingLabel="Submitting…"
             >
-              {isPending ? (
-                <span className="flex items-center gap-2">
-                  <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                  Submitting…
-                </span>
-              ) : 'Submit Report'}
-            </button>
+              Submit Report
+            </SubmitButton>
           </div>
         </form>
       </div>

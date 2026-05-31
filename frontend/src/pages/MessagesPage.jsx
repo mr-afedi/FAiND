@@ -16,6 +16,8 @@ import {
 import { useAuth } from '../context/AuthContext'
 import { CHAT_EVENT, normalizeMessage } from '../utils/chatMessage'
 import { ChevronLeft, Flag, MessageCircle } from '../components/icons'
+import SubmitButton from '../components/SubmitButton'
+import { useSubmitLock } from '../hooks/useSubmitLock'
 
 const SAFETY_TEXT =
   'Keep your conversation focused on recovering your item safely. Do not share passwords, banking details, or sensitive personal information. FAiND is not responsible for off-platform exchanges.'
@@ -71,6 +73,7 @@ export default function MessagesPage() {
   const [draft, setDraft] = useState('')
   const messagesEndRef = useRef(null)
   const [messages, setMessages] = useState([])
+  const { isSubmitting, tryAcquire, release } = useSubmitLock()
 
   const { data: inbox, isLoading: inboxLoading } = useQuery({
     queryKey: ['conversations'],
@@ -151,6 +154,9 @@ export default function MessagesPage() {
     onError: (err) => {
       toast.error(err.response?.data?.detail || 'Failed to send message')
     },
+    onSettled: () => {
+      release()
+    },
   })
 
   useEffect(() => {
@@ -173,8 +179,11 @@ export default function MessagesPage() {
     e.preventDefault()
     const body = draft.trim()
     if (!body || !detail?.can_send) return
+    if (!tryAcquire()) return
     sendMutation.mutate(body)
   }
+
+  const sendBusy = isSubmitting || sendMutation.isPending
 
   const showListOnMobile = !selectedId
   const showChatOnMobile = Boolean(selectedId)
@@ -344,15 +353,16 @@ export default function MessagesPage() {
                       placeholder="Type a message…"
                       maxLength={2000}
                       className="input-field flex-1 text-sm"
-                      disabled={sendMutation.isPending}
+                      disabled={sendBusy}
                     />
-                    <button
-                      type="submit"
-                      disabled={!draft.trim() || sendMutation.isPending}
+                    <SubmitButton
+                      loading={sendBusy}
+                      disabled={!draft.trim()}
                       className="btn-primary px-5 py-2 text-sm font-semibold disabled:opacity-50"
+                      loadingLabel="Sending…"
                     >
                       Send
-                    </button>
+                    </SubmitButton>
                   </form>
                 )}
               </>

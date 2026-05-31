@@ -8,6 +8,8 @@ import { useAuth } from '../context/AuthContext'
 import NavBar from '../components/NavBar'
 import { usePushNotifications } from '../hooks/usePushNotifications'
 import { invalidateAfterProfileUpdate } from '../utils/queryCache'
+import SubmitButton from '../components/SubmitButton'
+import { useSubmitLock } from '../hooks/useSubmitLock'
 
 // ── Reusable toggle component ─────────────────────────────────────────────────
 
@@ -157,6 +159,8 @@ export default function SettingsPage() {
     new_password: '',
     confirm_password: '',
   })
+  const profileLock = useSubmitLock()
+  const passwordLock = useSubmitLock()
   const [passwordErrors, setPasswordErrors] = useState({})
   const [showPasswords, setShowPasswords] = useState(false)
 
@@ -196,6 +200,7 @@ export default function SettingsPage() {
     onError: (err) => {
       toast.error(err.response?.data?.detail || 'Failed to update profile.')
     },
+    onSettled: () => profileLock.release(),
   })
 
   const changePasswordMutation = useMutation({
@@ -217,6 +222,7 @@ export default function SettingsPage() {
         toast.error('Failed to change password.')
       }
     },
+    onSettled: () => passwordLock.release(),
   })
 
   const updateSettingsMutation = useMutation({
@@ -290,11 +296,16 @@ export default function SettingsPage() {
   // ── Handlers ──
   function handleProfileSubmit(e) {
     e.preventDefault()
+    if (!profileLock.tryAcquire()) return
     setProfileErrors({})
     const errors = {}
     if (!profileForm.full_name?.trim()) errors.full_name = 'Name is required.'
     else if (profileForm.full_name.trim().length < 2) errors.full_name = 'Name too short.'
-    if (Object.keys(errors).length) { setProfileErrors(errors); return }
+    if (Object.keys(errors).length) {
+      profileLock.release()
+      setProfileErrors(errors)
+      return
+    }
     updateProfileMutation.mutate({
       full_name: profileForm.full_name.trim(),
       student_id: profileForm.student_id.trim() || null,
@@ -303,13 +314,18 @@ export default function SettingsPage() {
 
   function handlePasswordSubmit(e) {
     e.preventDefault()
+    if (!passwordLock.tryAcquire()) return
     setPasswordErrors({})
     const errors = {}
     if (!passwordForm.current_password) errors.current_password = 'Required.'
     if (passwordForm.new_password.length < 8) errors.new_password = 'At least 8 characters.'
     if (passwordForm.new_password !== passwordForm.confirm_password)
       errors.confirm_password = 'Passwords do not match.'
-    if (Object.keys(errors).length) { setPasswordErrors(errors); return }
+    if (Object.keys(errors).length) {
+      passwordLock.release()
+      setPasswordErrors(errors)
+      return
+    }
     changePasswordMutation.mutate({
       current: passwordForm.current_password,
       next: passwordForm.new_password,
@@ -439,15 +455,13 @@ export default function SettingsPage() {
               </div>
             </FieldRow>
 
-            <button
-              type="submit"
+            <SubmitButton
+              loading={profileLock.isSubmitting || updateProfileMutation.isPending}
               className="btn-primary"
-              disabled={updateProfileMutation.isPending}
+              loadingLabel="Saving…"
             >
-              {updateProfileMutation.isPending ? (
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              ) : 'Save Changes'}
-            </button>
+              Save Changes
+            </SubmitButton>
           </form>
         </Section>
 
@@ -503,15 +517,13 @@ export default function SettingsPage() {
               Changing your password will sign you out of all devices.
             </p>
 
-            <button
-              type="submit"
+            <SubmitButton
+              loading={passwordLock.isSubmitting || changePasswordMutation.isPending}
               className="btn-primary"
-              disabled={changePasswordMutation.isPending}
+              loadingLabel="Changing…"
             >
-              {changePasswordMutation.isPending ? (
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              ) : 'Change Password'}
-            </button>
+              Change Password
+            </SubmitButton>
           </form>
         </Section>
 

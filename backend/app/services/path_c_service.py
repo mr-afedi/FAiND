@@ -26,7 +26,7 @@ from app.schemas.path_c import PathCFormResponse, PathCSubmitRequest, PathCSubmi
 from app.schemas.verification import VerificationQuestionForm
 from app.utils.encryption import decrypt
 from app.services import matching_service as ms
-from app.services import trust_service, notification_service
+from app.services import trust_service, notification_service, fraud_service
 
 MAX_ATTEMPTS = 3
 FALSE_CLAIM_THRESHOLD = 0.30
@@ -453,6 +453,7 @@ def submit_path_c(
     payload: PathCSubmitRequest,
 ) -> PathCSubmitResponse:
     found_item = _get_found_item_for_claim(db, found_item_id, user)
+    fraud_service.assert_can_attempt_verification(db, user)
 
     if user.status != AccountStatus.ACTIVE:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is not active.")
@@ -493,7 +494,6 @@ def submit_path_c(
         found_item, submitted, breakdown, prior_scores, score
     )
     if _check_gradual_improvement(attempt_scores):
-        user.fraud_risk_score = min(100, user.fraud_risk_score + 10)
         breakdown["gradual_improvement_flag"] = True
 
     sorted_questions = sorted(found_item.hidden_questions, key=lambda x: x.position)
@@ -534,19 +534,19 @@ def submit_path_c(
     db.add(match)
     db.flush()
 
-    db.add(
-        VerificationAttempt(
-            university_id=user.university_id,
-            user_id=user.id,
-            potential_match_id=match.id,
-            lost_item_id=bridge_lost.id,
-            found_item_id=found_item.id,
-            path=VerificationPath.PATH_C,
-            ownership_score=round(score, 4),
-            score_breakdown=breakdown,
-            result=result,
-        )
+    attempt = VerificationAttempt(
+        university_id=user.university_id,
+        user_id=user.id,
+        potential_match_id=match.id,
+        lost_item_id=bridge_lost.id,
+        found_item_id=found_item.id,
+        path=VerificationPath.PATH_C,
+        ownership_score=round(score, 4),
+        score_breakdown=breakdown,
+        result=result,
     )
+    db.add(attempt)
+    db.flush()
 
     claim = ThisMightBeMineClaim(
         university_id=user.university_id,
@@ -563,6 +563,15 @@ def submit_path_c(
     )
     db.add(claim)
     db.flush()
+
+    if breakdown.get("gradual_improvement_flag"):
+        fraud_service.record_gradual_improvement(
+            db,
+            user_id=user.id,
+            university_id=user.university_id,
+            reference_id=claim.id,
+            attempt_scores=attempt_scores,
+        )
 
     notification_service.notify_path_c_claim_received(
         db,
@@ -667,7 +676,8 @@ def submit_path_c(
             trust_service.penalise_failed_verification(
                 db, user.id, attempt_number=3, item_id=found_item.id
             )
-            user.fraud_risk_score = min(100, user.fraud_risk_score + 20)
+
+        fraud_service.on_verification_rejected(db, attempt=attempt)
 
         if score < FALSE_CLAIM_THRESHOLD:
             trust_service.penalise_false_claim(db, user.id, found_item.id)

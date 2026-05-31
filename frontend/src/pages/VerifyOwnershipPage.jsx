@@ -10,6 +10,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import NavBar from '../components/NavBar'
 import { getPathAForm, submitPathA } from '../services/verificationService'
+import SubmitButton from '../components/SubmitButton'
+import { useSubmitLock } from '../hooks/useSubmitLock'
 import { invalidateAfterVerification } from '../utils/queryCache'
 import { Check, XCircle, Lock, MapPin, Clock } from '../components/icons'
 
@@ -77,6 +79,7 @@ export default function VerifyOwnershipPage() {
   const queryClient = useQueryClient()
   const [answers, setAnswers] = useState({})
   const [resultState, setResultState] = useState(null)
+  const { isSubmitting, tryAcquire, release } = useSubmitLock()
 
   const { data: form, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['path-a-form', matchId],
@@ -111,6 +114,9 @@ export default function VerifyOwnershipPage() {
     onError: (err) => {
       toast.error(err.response?.data?.detail || 'Verification submission failed')
     },
+    onSettled: () => {
+      release()
+    },
   })
 
   function handleAnswerChange(questionId, value) {
@@ -119,7 +125,9 @@ export default function VerifyOwnershipPage() {
 
   function handleSubmit(e) {
     e.preventDefault()
+    if (!tryAcquire()) return
     if (!form?.questions.every((q) => answers[q.id]?.trim())) {
+      release()
       toast.error('Please answer all verification questions')
       return
     }
@@ -237,13 +245,14 @@ export default function VerifyOwnershipPage() {
           </p>
 
           <div className="flex gap-3 pt-2">
-            <button
-              type="submit"
-              disabled={submitMutation.isPending || form.attempts_remaining_24h === 0}
+            <SubmitButton
+              loading={isSubmitting || submitMutation.isPending}
+              disabled={form.attempts_remaining_24h === 0}
               className="btn-primary flex-1 py-3 text-sm font-semibold disabled:opacity-50"
+              loadingLabel="Verifying…"
             >
-              {submitMutation.isPending ? 'Verifying…' : 'Submit Verification'}
-            </button>
+              Submit Verification
+            </SubmitButton>
             <button
               type="button"
               onClick={() => navigate('/dashboard?tab=pending')}

@@ -15,6 +15,7 @@ from app.models.message import Message
 from app.models.ihave_this_item_claim import IHaveThisItemClaim
 from app.models.this_might_be_mine_claim import ThisMightBeMineClaim
 from app.models.item_return import ItemReturn, ReturnMethod
+from app.models.fraud_event import FraudEvent, FraudSignalType
 
 __all__ = [
     "University",
@@ -45,4 +46,6 @@ __all__ = [
     "ThisMightBeMineClaim",
     "ItemReturn",
     "ReturnMethod",
+    "FraudEvent",
+    "FraudSignalType",
 ]

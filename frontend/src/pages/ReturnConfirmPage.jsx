@@ -16,6 +16,8 @@ import {
 } from '../services/returnService'
 import { invalidateAfterReturn } from '../utils/queryCache'
 import { Check, Hand, ScanSearch, ChevronLeft } from '../components/icons'
+import LoadingButton from '../components/LoadingButton'
+import { useSubmitLock } from '../hooks/useSubmitLock'
 
 function ItemPreview({ item, label }) {
   if (!item) return null
@@ -40,6 +42,7 @@ export default function ReturnConfirmPage() {
   const [qrPayload, setQrPayload] = useState(null)
   const [qrExpires, setQrExpires] = useState(null)
   const [pasteToken, setPasteToken] = useState('')
+  const { isSubmitting, tryAcquire, release } = useSubmitLock()
 
   const { data: status, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['return-status', matchId],
@@ -72,6 +75,7 @@ export default function ReturnConfirmPage() {
       }
     },
     onError: (err) => toast.error(err.response?.data?.detail || 'Could not confirm handover'),
+    onSettled: () => release(),
   })
 
   const ownerMutation = useMutation({
@@ -86,6 +90,7 @@ export default function ReturnConfirmPage() {
       }
     },
     onError: (err) => toast.error(err.response?.data?.detail || 'Could not confirm receipt'),
+    onSettled: () => release(),
   })
 
   const qrGenerateMutation = useMutation({
@@ -98,6 +103,7 @@ export default function ReturnConfirmPage() {
       refetch()
     },
     onError: (err) => toast.error(err.response?.data?.detail || 'Could not generate QR code'),
+    onSettled: () => release(),
   })
 
   const qrRedeemMutation = useMutation({
@@ -110,7 +116,20 @@ export default function ReturnConfirmPage() {
       }
     },
     onError: (err) => toast.error(err.response?.data?.detail || 'Invalid or expired QR code'),
+    onSettled: () => release(),
   })
+
+  function guardedMutate(mutation) {
+    if (!tryAcquire()) return
+    mutation.mutate()
+  }
+
+  const actionBusy =
+    isSubmitting
+    || finderMutation.isPending
+    || ownerMutation.isPending
+    || qrGenerateMutation.isPending
+    || qrRedeemMutation.isPending
 
   if (isLoading) {
     return (
@@ -226,24 +245,26 @@ export default function ReturnConfirmPage() {
           )}
 
           {isFinder && status.can_confirm_finder && (
-            <button
-              type="button"
-              onClick={() => finderMutation.mutate()}
-              disabled={finderMutation.isPending}
+            <LoadingButton
+              onClick={() => guardedMutate(finderMutation)}
+              loading={actionBusy}
+              disabled={actionBusy}
               className="btn-primary w-full py-3 text-sm"
+              loadingLabel="Confirming…"
             >
-              {finderMutation.isPending ? 'Confirming…' : 'I handed over the item'}
-            </button>
+              I handed over the item
+            </LoadingButton>
           )}
           {isOwner && status.can_confirm_owner && (
-            <button
-              type="button"
-              onClick={() => ownerMutation.mutate()}
-              disabled={ownerMutation.isPending}
+            <LoadingButton
+              onClick={() => guardedMutate(ownerMutation)}
+              loading={actionBusy}
+              disabled={actionBusy}
               className="btn-primary w-full py-3 text-sm"
+              loadingLabel="Confirming…"
             >
-              {ownerMutation.isPending ? 'Confirming…' : 'I received my item'}
-            </button>
+              I received my item
+            </LoadingButton>
           )}
           {isFinder && !status.can_confirm_finder && status.finder_handed_over && (
             <p className="text-sm text-slate-500 text-center">
@@ -271,14 +292,15 @@ export default function ReturnConfirmPage() {
           {isFinder && (
             <div className="space-y-4">
               {status.can_generate_qr && (
-                <button
-                  type="button"
-                  onClick={() => qrGenerateMutation.mutate()}
-                  disabled={qrGenerateMutation.isPending}
+                <LoadingButton
+                  onClick={() => guardedMutate(qrGenerateMutation)}
+                  loading={actionBusy}
+                  disabled={actionBusy}
                   className="btn-secondary w-full py-2.5 text-sm"
+                  loadingLabel="Generating…"
                 >
-                  {qrGenerateMutation.isPending ? 'Generating…' : 'Generate QR code'}
-                </button>
+                  Generate QR code
+                </LoadingButton>
               )}
               {(status.qr_active || qrPayload) && (
                 <div className="text-center">
@@ -322,14 +344,15 @@ export default function ReturnConfirmPage() {
                 placeholder="faind-return:…"
                 className="input-field w-full text-sm font-mono"
               />
-              <button
-                type="button"
-                onClick={() => qrRedeemMutation.mutate()}
-                disabled={!pasteToken.trim() || qrRedeemMutation.isPending}
+              <LoadingButton
+                onClick={() => guardedMutate(qrRedeemMutation)}
+                loading={actionBusy}
+                disabled={!pasteToken.trim() || actionBusy}
                 className="btn-primary w-full py-2.5 text-sm"
+                loadingLabel="Confirming…"
               >
-                {qrRedeemMutation.isPending ? 'Confirming…' : 'Confirm return via QR'}
-              </button>
+                Confirm return via QR
+              </LoadingButton>
             </div>
           )}
         </section>

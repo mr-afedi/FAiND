@@ -10,6 +10,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import NavBar from '../components/NavBar'
 import { getPathBForm, submitPathB } from '../services/pathBService'
+import SubmitButton from '../components/SubmitButton'
+import { useSubmitLock } from '../hooks/useSubmitLock'
 import { uploadImageToCloudinary } from '../services/itemService'
 import { invalidateAfterPathB } from '../utils/queryCache'
 import { useCampusZones } from '../hooks/useCampusZones'
@@ -146,6 +148,7 @@ export default function IHaveThisItemPage() {
   const [image, setImage] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [resultState, setResultState] = useState(null)
+  const { isSubmitting, tryAcquire, release } = useSubmitLock()
 
   const { zones, zonesLoading } = useCampusZones()
 
@@ -182,6 +185,9 @@ export default function IHaveThisItemPage() {
     onError: (err) => {
       toast.error(err.response?.data?.detail || 'Claim submission failed')
     },
+    onSettled: () => {
+      release()
+    },
   })
 
   async function handleImageSelect(file) {
@@ -202,7 +208,9 @@ export default function IHaveThisItemPage() {
 
   function handleSubmit(e) {
     e.preventDefault()
+    if (!tryAcquire()) return
     if (!form?.questions?.every((q) => (answers[q.id] || '').trim())) {
+      release()
       toast.error('Please answer every verification question')
       return
     }
@@ -351,17 +359,14 @@ export default function IHaveThisItemPage() {
           </p>
 
           <div className="flex gap-3 pt-2">
-            <button
-              type="submit"
-              disabled={
-                submitMutation.isPending
-                || form.attempts_remaining === 0
-                || form.attempt_counter_paused
-              }
+            <SubmitButton
+              loading={isSubmitting || submitMutation.isPending}
+              disabled={form.attempts_remaining === 0 || form.attempt_counter_paused}
               className="btn-primary flex-1 py-3 text-sm font-semibold disabled:opacity-50"
+              loadingLabel="Submitting…"
             >
-              {submitMutation.isPending ? 'Submitting…' : 'Submit Claim'}
-            </button>
+              Submit Claim
+            </SubmitButton>
             <button
               type="button"
               onClick={() => navigate(backLink)}

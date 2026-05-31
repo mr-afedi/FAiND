@@ -483,6 +483,30 @@ def notify_return_receipt_reminder(
     _fire_push(db, owner_id, "FAiND", body, link)
 
 
+def notify_fraud_alert(
+    db: Session,
+    *,
+    admin_id: uuid.UUID,
+    user_id: uuid.UUID,
+    title: str,
+    body: str,
+    link: str,
+    reference_id: uuid.UUID,
+) -> None:
+    """Section 18 — admin fraud monitoring alert (in-app + push)."""
+    create_notification(
+        db,
+        admin_id,
+        NotificationType.GENERAL,
+        title=title,
+        body=body,
+        link=link,
+        reference_id=reference_id,
+    )
+    db.flush()
+    _fire_push(db, admin_id, "FAiND", body, link)
+
+
 def get_unread_count(db: Session, user_id: uuid.UUID) -> int:
     return (
         db.query(Notification)

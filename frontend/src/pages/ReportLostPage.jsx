@@ -3,7 +3,7 @@
  *
  * Public description, 2–3 hidden verification Q&A, location, date, optional images.
  */
-import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
@@ -18,6 +18,8 @@ import { invalidateAfterItemCreate } from '../utils/queryCache'
 import { useCampusZones, createInitialQuestions, newQuestion } from '../hooks/useCampusZones'
 import { X } from '../components/icons'
 import CategoryPicker from '../components/CategoryPicker'
+import SubmitButton from '../components/SubmitButton'
+import { useSubmitLock } from '../hooks/useSubmitLock'
 
 function Field({ label, hint, required, children }) {
   return (
@@ -103,7 +105,7 @@ export default function ReportLostPage() {
 
   const todayMax = useMemo(() => new Date().toISOString().split('T')[0], [])
   const { zones, zonesLoading } = useCampusZones()
-  const submittingRef = useRef(false)
+  const { isSubmitting, tryAcquire, release } = useSubmitLock()
 
   const refreshWarnings = useCallback(async () => {
     const filled = questions.filter((q) => q.question.trim() && q.answer.trim())
@@ -165,7 +167,7 @@ export default function ReportLostPage() {
       toast.error(err.response?.data?.detail || 'Failed to submit report. Please try again.')
     },
     onSettled: () => {
-      submittingRef.current = false
+      release()
     },
   })
 
@@ -216,28 +218,27 @@ export default function ReportLostPage() {
 
   async function handleSubmit(e) {
     e.preventDefault()
-    if (submittingRef.current || isPending) return
-    submittingRef.current = true
+    if (!tryAcquire()) return
 
     if (!category) {
-      submittingRef.current = false
+      release()
       return toast.error('Please select a category')
     }
     if (!publicDesc.trim()) {
-      submittingRef.current = false
+      release()
       return toast.error('Public description is required')
     }
     if (!dateLost) {
-      submittingRef.current = false
+      release()
       return toast.error('Date lost is required')
     }
     const validQs = questions.filter((q) => q.question.trim() && q.answer.trim())
     if (validQs.length < 2) {
-      submittingRef.current = false
+      release()
       return toast.error('Please provide at least 2 verification questions with answers')
     }
     if (uploadingIdx !== null) {
-      submittingRef.current = false
+      release()
       return toast.error('Please wait for the image to finish uploading')
     }
 
@@ -376,22 +377,18 @@ export default function ReportLostPage() {
               type="button"
               onClick={() => navigate(-1)}
               className="btn-secondary"
-              disabled={isPending}
+              disabled={isSubmitting || isPending}
             >
               Cancel
             </button>
-            <button
-              type="submit"
-              disabled={isPending || uploadingIdx !== null}
+            <SubmitButton
+              loading={isSubmitting || isPending}
+              disabled={uploadingIdx !== null}
               className="btn-primary min-w-[140px]"
+              loadingLabel="Submitting…"
             >
-              {isPending ? (
-                <span className="flex items-center gap-2">
-                  <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                  Submitting…
-                </span>
-              ) : 'Submit Report'}
-            </button>
+              Submit Report
+            </SubmitButton>
           </div>
         </form>
       </div>

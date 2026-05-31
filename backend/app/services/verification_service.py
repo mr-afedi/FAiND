@@ -33,7 +33,7 @@ from app.schemas.verification import (
     AnswerSubmission,
 )
 from app.utils.encryption import decrypt
-from app.services import matching_service, trust_service, notification_service
+from app.services import matching_service, trust_service, notification_service, fraud_service
 from app.services import matching_service as ms
 
 MAX_ATTEMPTS_24H = 3
@@ -261,6 +261,7 @@ def submit_path_a(
     user: User,
     payload: PathASubmitRequest,
 ) -> PathASubmitResponse:
+    fraud_service.assert_can_attempt_verification(db, user)
     match = _get_match_for_owner(db, match_id, user)
 
     if match.status == PotentialMatchStatus.VERIFIED:
@@ -411,7 +412,8 @@ def submit_path_a(
             trust_service.penalise_failed_verification(
                 db, user.id, attempt_number=3, item_id=match.lost_item_id
             )
-            user.fraud_risk_score = min(100, user.fraud_risk_score + 20)
+
+        fraud_service.on_verification_rejected(db, attempt=attempt)
 
         if score < FALSE_CLAIM_THRESHOLD:
             trust_service.penalise_false_claim(db, user.id, match.lost_item_id)

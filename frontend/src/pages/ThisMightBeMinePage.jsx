@@ -9,6 +9,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import NavBar from '../components/NavBar'
 import { getPathCForm, submitPathC } from '../services/pathCService'
+import SubmitButton from '../components/SubmitButton'
+import { useSubmitLock } from '../hooks/useSubmitLock'
 import { invalidateAfterPathC } from '../utils/queryCache'
 import { Check, XCircle, Clock, MapPin } from '../components/icons'
 
@@ -104,6 +106,7 @@ export default function ThisMightBeMinePage() {
 
   const [answers, setAnswers] = useState({})
   const [resultState, setResultState] = useState(null)
+  const { isSubmitting, tryAcquire, release } = useSubmitLock()
 
   const { data: form, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['path-c-form', foundItemId],
@@ -133,6 +136,9 @@ export default function ThisMightBeMinePage() {
     onError: (err) => {
       toast.error(err.response?.data?.detail || 'Claim submission failed')
     },
+    onSettled: () => {
+      release()
+    },
   })
 
   function handleAnswerChange(questionId, value) {
@@ -141,7 +147,9 @@ export default function ThisMightBeMinePage() {
 
   function handleSubmit(e) {
     e.preventDefault()
+    if (!tryAcquire()) return
     if (!form?.questions?.every((q) => (answers[q.id] || '').trim())) {
+      release()
       toast.error('Please answer every verification question')
       return
     }
@@ -263,17 +271,14 @@ export default function ThisMightBeMinePage() {
           </p>
 
           <div className="flex gap-3 pt-2">
-            <button
-              type="submit"
-              disabled={
-                submitMutation.isPending
-                || form.attempts_remaining === 0
-                || form.attempt_counter_paused
-              }
+            <SubmitButton
+              loading={isSubmitting || submitMutation.isPending}
+              disabled={form.attempts_remaining === 0 || form.attempt_counter_paused}
               className="btn-primary flex-1 py-3 text-sm font-semibold disabled:opacity-50"
+              loadingLabel="Submitting…"
             >
-              {submitMutation.isPending ? 'Submitting…' : 'Submit Claim'}
-            </button>
+              Submit Claim
+            </SubmitButton>
             <button
               type="button"
               onClick={() => navigate(backLink)}

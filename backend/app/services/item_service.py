@@ -160,6 +160,40 @@ def _build_public_response(
 
 # ── Create ───────────────────────────────────────────────────────────────────
 
+_DUPLICATE_ITEM_MESSAGE = (
+    "You have already submitted this item. Please wait before trying again."
+)
+_DUPLICATE_SUBMIT_WINDOW_SECONDS = 30
+
+
+def _assert_not_duplicate_item_post(
+    db: Session,
+    *,
+    user_id: uuid.UUID,
+    item_type: ItemType,
+    category,
+    public_description: str,
+    zone_id: uuid.UUID,
+) -> None:
+    """Reject identical item posts within 30 seconds (double-submit guard)."""
+    since = datetime.now(timezone.utc) - timedelta(seconds=_DUPLICATE_SUBMIT_WINDOW_SECONDS)
+    desc_norm = public_description.strip().lower()
+    recent = (
+        db.query(Item)
+        .filter(
+            Item.posted_by_id == user_id,
+            Item.item_type == item_type,
+            Item.category == category,
+            Item.location_id == zone_id,
+            Item.created_at >= since,
+        )
+        .all()
+    )
+    for item in recent:
+        if item.public_description.strip().lower() == desc_norm:
+            raise ValueError(_DUPLICATE_ITEM_MESSAGE)
+
+
 def create_lost_item(
     db: Session,
     current_user: User,
@@ -181,6 +215,15 @@ def create_lost_item(
         raise ValueError("You have reached the daily limit of 10 item posts")
 
     label, lat, lng, zone_id = _resolve_location(db, payload.location_id, current_user.university_id)
+
+    _assert_not_duplicate_item_post(
+        db,
+        user_id=current_user.id,
+        item_type=ItemType.LOST,
+        category=payload.category,
+        public_description=payload.public_description,
+        zone_id=zone_id,
+    )
 
     expiry = datetime.now(timezone.utc) + timedelta(days=_LOST_ITEM_ACTIVE_DAYS)
 
@@ -491,6 +534,16 @@ def create_found_item(
         raise ValueError("You have reached the daily limit of 10 item posts")
 
     label, lat, lng, zone_id = _resolve_location(db, payload.location_id, current_user.university_id)
+
+    _assert_not_duplicate_item_post(
+        db,
+        user_id=current_user.id,
+        item_type=ItemType.FOUND,
+        category=payload.category,
+        public_description=payload.public_description,
+        zone_id=zone_id,
+    )
+
     expiry = datetime.now(timezone.utc) + timedelta(days=_FOUND_ITEM_ACTIVE_DAYS)
 
     item = Item(
