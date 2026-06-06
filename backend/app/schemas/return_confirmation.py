@@ -120,4 +120,5 @@ class ReturnedDetailResponse(BaseModel):
     chat_read_only: bool = True
     paystack_ready: bool = False
     summary_note: Optional[str] = None
+    appreciation_message: Optional[str] = None
     dispute_reason: Optional[str] = None

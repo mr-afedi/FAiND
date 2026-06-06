@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { userService } from '../services/userService'
 import { useAuth } from '../context/AuthContext'
 import NavBar from '../components/NavBar'
+import ReportModal from '../components/ReportModal'
 
 function tierClass(tier) {
   switch (tier) {
@@ -16,6 +18,7 @@ function tierClass(tier) {
 export default function PublicProfilePage() {
   const { username } = useParams()
   const { user: me } = useAuth()
+  const [reportOpen, setReportOpen] = useState(false)
 
   const { data: profile, isLoading, isError } = useQuery({
     queryKey: ['profile', username],
@@ -111,9 +114,10 @@ export default function PublicProfilePage() {
             <div className="flex gap-3">
               {me && me.username !== profile.username && (
                 <button
+                  type="button"
                   className="btn-ghost text-sm text-red-600 dark:text-red-400
                              hover:bg-red-50 dark:hover:bg-red-900/20"
-                  onClick={() => alert('Report user — Feature J')}
+                  onClick={() => setReportOpen(true)}
                 >
                   Report User
                 </button>
@@ -127,6 +131,16 @@ export default function PublicProfilePage() {
           </>
         )}
       </div>
+
+      {profile && (
+        <ReportModal
+          open={reportOpen}
+          onClose={() => setReportOpen(false)}
+          type="user"
+          targetId={profile.id}
+          targetLabel={`@${profile.username} — ${profile.full_name}`}
+        />
+      )}
     </div>
   )
 }

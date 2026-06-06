@@ -414,6 +414,50 @@ def notify_finder_handed_over(
     _fire_push(db, owner_id, "FAiND", body, link)
 
 
+def notify_appreciation_received(
+    db: Session,
+    *,
+    finder_id: uuid.UUID,
+    return_id: uuid.UUID,
+) -> None:
+    """Section 20.2 — finder notified (no amount disclosed)."""
+    body = "The owner expressed appreciation to you for helping return their item."
+    link = f"/returns/{return_id}"
+    create_notification(
+        db,
+        finder_id,
+        NotificationType.GENERAL,
+        title="Appreciation received",
+        body=body,
+        link=link,
+        reference_id=return_id,
+    )
+    db.flush()
+    _fire_push(db, finder_id, "FAiND", body, link)
+
+
+def notify_appreciation_sent(
+    db: Session,
+    *,
+    owner_id: uuid.UUID,
+    return_id: uuid.UUID,
+) -> None:
+    """Section 20 — owner confirmation after successful payment."""
+    body = "Your appreciation was sent successfully. Thank you for supporting the finder!"
+    link = f"/returns/{return_id}"
+    create_notification(
+        db,
+        owner_id,
+        NotificationType.GENERAL,
+        title="Appreciation sent",
+        body=body,
+        link=link,
+        reference_id=return_id,
+    )
+    db.flush()
+    _fire_push(db, owner_id, "FAiND", body, link)
+
+
 def notify_return_disputed(
     db: Session,
     *,
@@ -481,6 +525,99 @@ def notify_return_receipt_reminder(
     )
     db.flush()
     _fire_push(db, owner_id, "FAiND", body, link)
+
+
+def notify_report_reviewed(
+    db: Session,
+    reporter_id: uuid.UUID,
+    report_id: uuid.UUID,
+) -> None:
+    """Section 13.1/13.2 — reporter notified when admin acts (outcome not disclosed)."""
+    body = "Thank you — your report has been reviewed."
+    create_notification(
+        db,
+        reporter_id,
+        NotificationType.GENERAL,
+        title="Report reviewed",
+        body=body,
+        link="/dashboard",
+        reference_id=report_id,
+    )
+    db.flush()
+    _fire_push(db, reporter_id, "FAiND", body, "/dashboard")
+
+
+def notify_admins_report_escalated(
+    db: Session,
+    *,
+    report_type: str,
+    target_id: uuid.UUID,
+) -> None:
+    """Section 13 — auto-escalation at 3+ distinct reporters."""
+    from app.models.user import User, UserRole, AccountStatus
+
+    admins = (
+        db.query(User)
+        .filter(
+            User.role.in_((UserRole.ROOT_ADMIN, UserRole.ASSISTANT_ROOT_ADMIN)),
+            User.status == AccountStatus.ACTIVE,
+        )
+        .all()
+    )
+    label = "post" if report_type == "post" else "user"
+    body = (
+        f"A {label} report was auto-escalated after {_ESCALATION_LABEL} "
+        "distinct reports. Priority review required."
+    )
+    link = f"/admin/reports?type={label}&target={target_id}"
+    for admin in admins:
+        create_notification(
+            db,
+            admin.id,
+            NotificationType.GENERAL,
+            title="Priority report — review needed",
+            body=body,
+            link=link,
+            reference_id=target_id,
+        )
+    db.flush()
+
+
+_ESCALATION_LABEL = "three or more"
+
+
+def notify_user_warned(db: Session, user_id: uuid.UUID) -> None:
+    """Section 13.4 — warn user after admin review."""
+    body = (
+        "A moderator reviewed reports about your account. "
+        "Please follow FAiND community guidelines."
+    )
+    create_notification(
+        db,
+        user_id,
+        NotificationType.GENERAL,
+        title="Community guidelines reminder",
+        body=body,
+        link="/settings",
+        reference_id=None,
+    )
+    db.flush()
+    _fire_push(db, user_id, "FAiND", body, "/settings")
+
+
+def notify_account_suspended(db: Session, user_id: uuid.UUID) -> None:
+    body = "Your account has been suspended following a moderation review. Contact support if you believe this is an error."
+    create_notification(
+        db,
+        user_id,
+        NotificationType.ACCOUNT_SUSPENDED,
+        title="Account suspended",
+        body=body,
+        link="/settings",
+        reference_id=None,
+    )
+    db.flush()
+    _fire_push(db, user_id, "FAiND", body, "/settings")
 
 
 def notify_fraud_alert(

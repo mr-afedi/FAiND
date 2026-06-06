@@ -14,3 +14,6 @@
 - [x] Feature M — Return Confirmation
 - [x] Feature N — Returned Items
 - [x] Feature O — Fraud Detection
+- [x] Feature P — Post and User Reporting
+- [x] Feature Q — Tipping (Paystack)
+- [x] Feature R — Admin Dashboard

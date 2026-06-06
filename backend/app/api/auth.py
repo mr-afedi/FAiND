@@ -119,6 +119,17 @@ async def login(
 
     # Root Admin requires TOTP — issue a short-lived session token first
     if user.role == UserRole.ROOT_ADMIN and user.totp_enabled:
+        from app.utils.totp_utils import is_valid_totp_secret
+
+        if not is_valid_totp_secret(user.totp_secret):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Root admin 2FA is misconfigured. Generate a secret with "
+                    "`python -c \"import pyotp; print(pyotp.random_base32())\"`, "
+                    "set ROOT_ADMIN_TOTP_SECRET in .env, then run: python seed_admin.py"
+                ),
+            )
         # A short-lived token scoped only for the TOTP step
         session_token = create_access_token(
             {"sub": str(user.id), "role": user.role.value, "totp_pending": True},
@@ -158,14 +169,24 @@ async def totp_verify(
             detail="Invalid or expired session token.",
         )
 
+    from app.utils.totp_utils import is_valid_totp_secret, normalize_totp_secret
+
     user = get_user_by_id(db, payload.get("sub"))
     if not user or not user.totp_secret:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="2FA not configured for this account.",
         )
+    if not is_valid_totp_secret(user.totp_secret):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Root admin 2FA is misconfigured. Set a valid base32 "
+                "ROOT_ADMIN_TOTP_SECRET in .env, then run: python seed_admin.py"
+            ),
+        )
 
-    totp = pyotp.TOTP(user.totp_secret)
+    totp = pyotp.TOTP(normalize_totp_secret(user.totp_secret))
     if not totp.verify(data.totp_code, valid_window=1):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

@@ -16,6 +16,16 @@ from app.models.ihave_this_item_claim import IHaveThisItemClaim
 from app.models.this_might_be_mine_claim import ThisMightBeMineClaim
 from app.models.item_return import ItemReturn, ReturnMethod
 from app.models.fraud_event import FraudEvent, FraudSignalType
+from app.models.tip_payment import TipPayment, TipPaymentStatus
+from app.models.admin_log import AdminLog, AdminActionType
+from app.models.report import (
+    PostReport,
+    UserReport,
+    ReportStatus,
+    PostReportReason,
+    UserReportReason,
+    AdminReportAction,
+)
 
 __all__ = [
     "University",
@@ -48,4 +58,14 @@ __all__ = [
     "ReturnMethod",
     "FraudEvent",
     "FraudSignalType",
+    "PostReport",
+    "UserReport",
+    "ReportStatus",
+    "PostReportReason",
+    "UserReportReason",
+    "AdminReportAction",
+    "TipPayment",
+    "TipPaymentStatus",
+    "AdminLog",
+    "AdminActionType",
 ]

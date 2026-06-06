@@ -20,6 +20,7 @@ def trust_tier(score: int) -> str:
 # ── Public profile — strictly what Section 23.1 allows ───────────────────────
 
 class PublicProfileResponse(BaseModel):
+    id: uuid.UUID
     username: str
     full_name: str
     profile_photo_url: Optional[str] = None

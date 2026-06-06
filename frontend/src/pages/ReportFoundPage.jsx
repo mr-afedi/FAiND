@@ -8,7 +8,7 @@
  *   - Initial status → FOUND (not OPEN)
  *   - Active period: 21 days
  */
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'

@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     ROOT_ADMIN_PASSWORD: str = ""
     ROOT_ADMIN_TOTP_SECRET: str = ""
 
+    # Admin dashboard secret path segment (Section 26.1) — e.g. "ops-7f3a"
+    ADMIN_SECRET_PATH: str = ""
+
     # Paystack
     PAYSTACK_SECRET_KEY: str = ""
     PAYSTACK_PUBLIC_KEY: str = ""

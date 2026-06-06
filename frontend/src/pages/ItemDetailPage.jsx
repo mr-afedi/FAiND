@@ -10,7 +10,7 @@
  * Logged-in (not owner):
  *   - "I Have This Item" (lost items) → Path B (Feature J)
  *   - "This Might Be Mine" (found items) → Path C (Feature K)
- *   - "Flag / Report Post" → placeholder (Feature P)
+ *   - "Flag / Report Post" → Feature P
  *
  * Owner only:
  *   - Extend Post / Remove Post / Mark as Returned → stubs for future features
@@ -21,6 +21,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { useAuth } from '../context/AuthContext'
 import NavBar from '../components/NavBar'
+import ReportModal from '../components/ReportModal'
 import ItemUnavailablePage from './ItemUnavailablePage'
 import { getItemDetail, deleteItem, deleteFoundItem, extendItem, extendFoundItem } from '../services/itemService'
 import { getMyMatches } from '../services/matchService'
@@ -134,6 +135,7 @@ export default function ItemDetailPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [lightboxIdx, setLightboxIdx] = useState(null)
+  const [reportOpen, setReportOpen] = useState(false)
 
   const { data: item, isLoading, isError } = useQuery({
     queryKey: ['item', itemId],
@@ -629,11 +631,10 @@ export default function ItemDetailPage() {
                   )}
                   {!foundOwnerViewingMatchedLost && (
                     <button
+                      type="button"
                       onClick={() => {
                         if (!isAuthenticated) navigate('/login', { state: { from: `/items/${itemId}` } })
-                        else toast('Report flow coming in a future update.', {
-                          icon: <Flag className="w-5 h-5 text-red-500" aria-hidden />,
-                        })
+                        else setReportOpen(true)
                       }}
                       className="text-xs text-slate-400 hover:text-red-500 dark:hover:text-red-400
                                  transition-colors text-center py-1 inline-flex items-center justify-center gap-1 w-full"
@@ -755,6 +756,14 @@ export default function ItemDetailPage() {
           </div>
         </div>
       </div>
+
+      <ReportModal
+        open={reportOpen}
+        onClose={() => setReportOpen(false)}
+        type="post"
+        targetId={itemId}
+        targetLabel={item?.public_description}
+      />
     </div>
   )
 }

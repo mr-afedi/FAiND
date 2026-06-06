@@ -26,7 +26,7 @@ from app.schemas.return_confirmation import (
     ReturnedListResponse,
     QrGenerateResponse,
 )
-from app.services import trust_service, notification_service, returned_items_service
+from app.services import trust_service, notification_service, returned_items_service, tipping_service
 
 RETURN_WINDOW_DAYS = 7
 QR_VALID_HOURS = 24
@@ -504,6 +504,9 @@ def get_return_detail(
 
     now = datetime.now(timezone.utc)
     is_owner = user.id == record.lost_owner_id
+    if tipping_service._sync_appreciation_from_success_tip(db, record):
+        db.commit()
+        db.refresh(record)
     lifecycle = returned_items_service.build_lifecycle_flags(record, user, now)
     return ReturnedDetailResponse(
         return_id=record.id,
@@ -524,12 +527,19 @@ def get_return_detail(
         },
         tipping_window_ends_at=record.tipping_window_ends_at,
         dispute_window_ends_at=record.dispute_window_ends_at,
-        appreciation_skipped_until=record.appreciation_skipped_until,
         dispute_reason=record.dispute_reason if lifecycle["dispute_active"] else None,
-        paystack_ready=False,
+        paystack_ready=tipping_service.paystack_configured(),
         summary_note=record.summary_note,
+        appreciation_message=(
+            APPRECIATION_MESSAGE_FINDER
+            if not is_owner and lifecycle.get("appreciation_sent")
+            else None
+        ),
         **lifecycle,
     )
+
+
+APPRECIATION_MESSAGE_FINDER = "The owner expressed appreciation to the finder."
 
 
 def count_user_returns(db: Session, user_id: uuid.UUID) -> int:

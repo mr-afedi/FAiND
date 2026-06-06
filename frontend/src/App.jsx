@@ -25,6 +25,8 @@ import ThisMightBeMinePage  from './pages/ThisMightBeMinePage'
 import MessagesPage        from './pages/MessagesPage'
 import ReturnConfirmPage   from './pages/ReturnConfirmPage'
 import ReturnedDetailPage  from './pages/ReturnedDetailPage'
+import AdminLoginPage      from './pages/AdminLoginPage'
+import AdminDashboardPage  from './pages/AdminDashboardPage'
 
 // Guards
 import ProtectedRoute from './components/ProtectedRoute'
@@ -113,6 +115,11 @@ export default function App() {
         <Route path="/returns/:returnId" element={
           <ProtectedRoute><ReturnedDetailPage /></ProtectedRoute>
         } />
+
+        {/* Feature R — secret admin route (404 if secret path wrong) */}
+        <Route path="/admin/:adminSecret/login" element={<AdminLoginPage />} />
+        <Route path="/admin/:adminSecret/dashboard" element={<AdminDashboardPage />} />
+        <Route path="/admin/:adminSecret" element={<AdminLoginPage />} />
 
         {/* Fallback — unmatched routes show a not-found page, never silently redirect */}
         <Route path="*" element={<NotFoundPage />} />

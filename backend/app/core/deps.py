@@ -1,7 +1,8 @@
 """
 FastAPI dependency injection helpers — JWT guards, DB session, etc.
 """
-from fastapi import Depends, HTTPException, status, Request
+from fastapi import Depends, HTTPException, status, Request, Header
+from app.core.config import get_settings
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
@@ -134,4 +135,34 @@ def require_root_admin(current_user: User = Depends(get_current_user)) -> User:
     if current_user.role != UserRole.ROOT_ADMIN:
         # Return 404 — don't reveal that this route exists
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found.")
+    return current_user
+
+
+def _admin_secret_ok(secret_path: str | None) -> bool:
+    settings = get_settings()
+    configured = (settings.ADMIN_SECRET_PATH or "").strip()
+    if not configured:
+        return False
+    return (secret_path or "").strip() == configured
+
+
+def require_admin_secret(
+    x_admin_secret_path: str | None = Header(None, alias="X-Admin-Secret-Path"),
+) -> None:
+    """Secret admin route guard — returns 404 when path does not match (Section 26.1)."""
+    if not _admin_secret_ok(x_admin_secret_path):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found.")
+
+
+def require_admin_access(
+    _: None = Depends(require_admin_secret),
+    current_user: User = Depends(require_admin),
+) -> User:
+    return current_user
+
+
+def require_root_admin_access(
+    _: None = Depends(require_admin_secret),
+    current_user: User = Depends(require_root_admin),
+) -> User:
     return current_user

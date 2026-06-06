@@ -17,6 +17,7 @@ import { useAuth } from '../context/AuthContext'
 import { CHAT_EVENT, normalizeMessage } from '../utils/chatMessage'
 import { ChevronLeft, Flag, MessageCircle } from '../components/icons'
 import SubmitButton from '../components/SubmitButton'
+import ReportModal from '../components/ReportModal'
 import { useSubmitLock } from '../hooks/useSubmitLock'
 
 const SAFETY_TEXT =
@@ -74,6 +75,7 @@ export default function MessagesPage() {
   const messagesEndRef = useRef(null)
   const [messages, setMessages] = useState([])
   const { isSubmitting, tryAcquire, release } = useSubmitLock()
+  const [reportOpen, setReportOpen] = useState(false)
 
   const { data: inbox, isLoading: inboxLoading } = useQuery({
     queryKey: ['conversations'],
@@ -296,7 +298,7 @@ export default function MessagesPage() {
                   </Link>
                   <button
                     type="button"
-                    onClick={() => toast('Report flow coming in a future update.', { icon: '🚩' })}
+                    onClick={() => setReportOpen(true)}
                     className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-slate-100 dark:hover:bg-slate-800"
                     aria-label="Report user"
                   >
@@ -370,6 +372,17 @@ export default function MessagesPage() {
           </section>
         </div>
       </div>
+
+      {detail?.other_user && (
+        <ReportModal
+          open={reportOpen}
+          onClose={() => setReportOpen(false)}
+          type="user"
+          targetId={detail.other_user.id}
+          conversationId={selectedId}
+          targetLabel={`@${detail.other_user.username}`}
+        />
+      )}
     </div>
   )
 }

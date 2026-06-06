@@ -25,7 +25,7 @@ def _days_left(ends_at: datetime | None, now: datetime) -> int:
 
 
 def is_dispute_active(record: ItemReturn) -> bool:
-    return record.dispute_filed_at is not None
+    return record.dispute_filed_at is not None and record.dispute_resolved_at is None
 
 
 def tipping_window_open(record: ItemReturn, now: datetime) -> bool:
@@ -166,13 +166,14 @@ def is_return_chat_readonly(db: Session, potential_match_id: uuid.UUID) -> bool:
 
 
 def mark_appreciation_sent(db: Session, return_id: uuid.UUID) -> ItemReturn:
-    """Called by Feature Q when Paystack payment succeeds."""
+    """Called by TippingService when Paystack payment succeeds."""
     record = db.query(ItemReturn).filter(ItemReturn.id == return_id).first()
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Return not found.")
     now = datetime.now(timezone.utc)
     record.appreciation_sent_at = now
     record.appreciation_skipped_until = None
+    record.summary_note = "The owner expressed appreciation to the finder."
     db.commit()
     db.refresh(record)
     return record

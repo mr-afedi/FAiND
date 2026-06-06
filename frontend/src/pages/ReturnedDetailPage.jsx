@@ -1,16 +1,18 @@
 /**
  * ReturnedDetailPage — Section 16.2 / 27.13 (Feature N).
  */
-import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useState, useEffect, useRef } from 'react'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import NavBar from '../components/NavBar'
+import TipAppreciationModal from '../components/TipAppreciationModal'
 import {
   getReturnDetail,
   skipAppreciation,
   disputeReturn,
 } from '../services/returnService'
+import { verifyTip } from '../services/tippingService'
 import { invalidateAfterReturn } from '../utils/queryCache'
 import { getCategoryLabel, Check, MapPin, ChevronLeft, AlertTriangle } from '../components/icons'
 import LoadingButton from '../components/LoadingButton'
@@ -23,11 +25,17 @@ const METHOD_LABEL = {
 
 export default function ReturnedDetailPage() {
   const { returnId } = useParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const [disputeOpen, setDisputeOpen] = useState(false)
   const [disputeReason, setDisputeReason] = useState('')
+  const [tipModalOpen, setTipModalOpen] = useState(false)
+  const verifyStarted = useRef(false)
   const skipLock = useSubmitLock()
   const disputeLock = useSubmitLock()
+
+  const tipVerify = searchParams.get('tip_verify') === '1'
+  const tipReference = searchParams.get('reference')
 
   const { data: detail, isLoading, isError, refetch } = useQuery({
     queryKey: ['return-detail', returnId],
@@ -67,6 +75,35 @@ export default function ReturnedDetailPage() {
     onError: (err) => toast.error(err.response?.data?.detail || 'Could not file dispute'),
     onSettled: () => disputeLock.release(),
   })
+
+  useEffect(() => {
+    if (!tipVerify || !tipReference || verifyStarted.current) return
+    verifyStarted.current = true
+
+    verifyTip(tipReference)
+      .then((result) => {
+        if (result.status === 'success') {
+          toast.success(result.message || 'Appreciation sent successfully.')
+          invalidateAfterReturn(queryClient, { returnId })
+          refetch()
+        } else if (result.status === 'pending') {
+          toast('Payment is still processing. Refresh in a moment if needed.', { icon: '⏳' })
+        } else {
+          toast.error(result.message || 'Could not verify payment.')
+        }
+      })
+      .catch((err) => {
+        toast.error(err.response?.data?.detail || 'Could not verify payment.')
+      })
+      .finally(() => {
+        setSearchParams((prev) => {
+          const next = new URLSearchParams(prev)
+          next.delete('tip_verify')
+          next.delete('reference')
+          return next
+        }, { replace: true })
+      })
+  }, [tipVerify, tipReference, returnId, queryClient, refetch, setSearchParams])
 
   if (isLoading) {
     return (
@@ -138,7 +175,7 @@ export default function ReturnedDetailPage() {
           Returned {new Date(detail.returned_at).toLocaleString()}
         </p>
 
-        {detail.summary_note && (
+        {detail.summary_note && !detail.appreciation_message && (
           <p className="text-sm text-slate-600 dark:text-slate-400 mb-4 glass p-4 rounded-xl">
             {detail.summary_note}
           </p>
@@ -205,9 +242,15 @@ export default function ReturnedDetailPage() {
           </div>
         )}
 
-        {detail.appreciation_sent && (
+        {detail.appreciation_message && (
           <div className="glass p-4 mb-4 text-sm text-teal-700 dark:text-teal-300">
-            Appreciation was sent to the finder.
+            {detail.appreciation_message}
+          </div>
+        )}
+
+        {detail.appreciation_sent && detail.viewer_role === 'lost_owner' && (
+          <div className="glass p-4 mb-4 text-sm text-teal-700 dark:text-teal-300">
+            You sent appreciation to the finder.
             {detail.tip_frozen && ' (Frozen while dispute is open.)'}
           </div>
         )}
@@ -220,10 +263,16 @@ export default function ReturnedDetailPage() {
                 ? `${detail.tipping_days_left} day${detail.tipping_days_left !== 1 ? 's' : ''} left to send appreciation`
                 : 'Tipping window closing soon'}
             </p>
+            {!detail.paystack_ready && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 mb-3">
+                Payments are not configured on this server yet. Contact your administrator.
+              </p>
+            )}
             <button
               type="button"
               className="btn-primary w-full py-2.5 text-sm mb-2"
-              onClick={() => toast('Paystack payments arrive in Feature Q.', { icon: '💳' })}
+              disabled={!detail.paystack_ready}
+              onClick={() => setTipModalOpen(true)}
             >
               Send Appreciation
             </button>
@@ -313,6 +362,13 @@ export default function ReturnedDetailPage() {
           </Link>
         )}
       </div>
+
+      <TipAppreciationModal
+        open={tipModalOpen}
+        onClose={() => setTipModalOpen(false)}
+        returnId={returnId}
+        daysLeft={detail?.tipping_days_left ?? 0}
+      />
     </div>
   )
 }

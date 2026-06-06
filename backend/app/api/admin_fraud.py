@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import require_admin
+from app.core.deps import require_admin_access
 from app.models.user import User
 from app.schemas.fraud import (
     AdminConfirmFraudResponse,
@@ -26,7 +26,7 @@ router = APIRouter(prefix="/admin/fraud", tags=["admin-fraud"])
 
 @router.get("/alerts", response_model=FraudAlertsResponse)
 def get_fraud_alerts(
-    _admin: User = Depends(require_admin),
+    _admin: User = Depends(require_admin_access),
     db: Session = Depends(get_db),
 ):
     rows = fraud_service.list_fraud_alerts(db)
@@ -38,7 +38,7 @@ def get_fraud_alerts(
 @router.get("/users/{user_id}", response_model=FraudUserEventsResponse)
 def get_user_fraud_history(
     user_id: uuid.UUID,
-    _admin: User = Depends(require_admin),
+    _admin: User = Depends(require_admin_access),
     db: Session = Depends(get_db),
 ):
     summary = fraud_service.get_user_fraud_summary(db, user_id)
@@ -52,7 +52,7 @@ def get_user_fraud_history(
 @router.post("/users/{user_id}/confirm", response_model=AdminConfirmFraudResponse)
 def confirm_user_fraud(
     user_id: uuid.UUID,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_admin_access),
     db: Session = Depends(get_db),
 ):
     event = fraud_service.admin_confirm_fraud(

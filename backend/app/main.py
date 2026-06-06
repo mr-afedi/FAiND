@@ -19,6 +19,11 @@ from app.api.messages import router as messages_router
 from app.api.chat_ws import router as chat_ws_router
 from app.api.returns import router as returns_router
 from app.api.admin_fraud import router as admin_fraud_router
+from app.api.reports import router as reports_router
+from app.api.admin_reports import router as admin_reports_router
+from app.api.tipping import router as tipping_router
+from app.api.admin_tips import router as admin_tips_router
+from app.api.admin_dashboard import router as admin_dashboard_router
 from app.core.scheduler import scheduler_lifespan
 
 settings = get_settings()
@@ -61,6 +66,11 @@ app.include_router(messages_router, prefix="/api/v1")
 app.include_router(chat_ws_router, prefix="/api/v1")
 app.include_router(returns_router, prefix="/api/v1")
 app.include_router(admin_fraud_router, prefix="/api/v1")
+app.include_router(reports_router, prefix="/api/v1")
+app.include_router(admin_reports_router, prefix="/api/v1")
+app.include_router(tipping_router, prefix="/api/v1")
+app.include_router(admin_tips_router, prefix="/api/v1")
+app.include_router(admin_dashboard_router, prefix="/api/v1")
 
 
 @app.get("/health")

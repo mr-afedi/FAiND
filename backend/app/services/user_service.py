@@ -30,8 +30,14 @@ def _count_returns(db: Session, user_id) -> int:
     return return_service.count_user_returns(db, user_id)
 
 
+def _count_tips_received(db: Session, user_id) -> int:
+    from app.services import tipping_service
+    return tipping_service.count_tips_received(db, user_id)
+
+
 def _build_public_profile(db: Session, user: User, university: University) -> PublicProfileResponse:
     return PublicProfileResponse(
+        id=user.id,
         username=user.username,
         full_name=user.full_name,
         profile_photo_url=user.profile_photo_url,
@@ -39,7 +45,7 @@ def _build_public_profile(db: Session, user: User, university: University) -> Pu
         university_short_name=university.short_name,
         member_since=_member_since(user.created_at),
         items_returned_count=_count_returns(db, user.id),
-        tips_received_count=0,    # Feature Q will populate this
+        tips_received_count=_count_tips_received(db, user.id),
     )
 
 

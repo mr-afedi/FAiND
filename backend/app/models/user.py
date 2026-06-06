@@ -54,6 +54,7 @@ class User(Base):
     # Trust & fraud
     trust_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     fraud_risk_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reports_suppressed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Settings
     civic_alerts_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
