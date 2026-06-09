@@ -28,6 +28,7 @@ import { getMyMatches } from '../services/matchService'
 import { getReturnStatusByItem } from '../services/returnService'
 import { invalidateAfterItemChange } from '../utils/queryCache'
 import { matchVerificationInProgress, matchChatUnlocked } from '../utils/viewerItemBadges'
+import { pickPrimaryMatch, matchNeedsVerification, matchVerificationComplete } from '../utils/matchSelection'
 import {
   CategoryIcon,
   CategoryLabel,
@@ -151,7 +152,8 @@ export default function ItemDetailPage() {
     enabled: Boolean(isAuthenticated),
   })
 
-  const ownerMatch = matchData?.matches?.find(
+  const ownerMatch = pickPrimaryMatch(
+    matchData?.matches,
     (m) => m.user_role === 'lost_owner'
       && String(m.lost_item?.id) === String(itemId)
       && ['active', 'pending_review', 'verified'].includes(m.status),
@@ -160,7 +162,8 @@ export default function ItemDetailPage() {
   const isPathCMatch = (m) => m?.score_breakdown?.path === 'path_c'
   const isPathBMatch = (m) => m?.score_breakdown?.path === 'path_b'
 
-  const matchAsLostOwnerOnFound = matchData?.matches?.find(
+  const matchAsLostOwnerOnFound = pickPrimaryMatch(
+    matchData?.matches,
     (m) => m.user_role === 'lost_owner'
       && String(m.found_item?.id) === String(itemId)
       && !isPathCMatch(m)
@@ -684,7 +687,7 @@ export default function ItemDetailPage() {
               {/* Owner actions */}
               {isOwner && (
                 <div className="flex flex-col gap-2">
-                  {ownerMatch?.status === 'active' && (
+                  {matchNeedsVerification(ownerMatch) && (
                     <Link
                       to={`/verify-ownership/${ownerMatch.id}`}
                       className="btn-primary w-full py-3 text-sm font-semibold text-center"
@@ -714,7 +717,7 @@ export default function ItemDetailPage() {
                       View in Returned
                     </Link>
                   )}
-                  {ownerMatch?.status === 'verified' && ownerMatch.conversation_id && (
+                  {matchVerificationComplete(ownerMatch) && ownerMatch.conversation_id && (
                     <Link
                       to={`/messages/${ownerMatch.conversation_id}`}
                       className="btn-secondary w-full py-3 text-sm font-semibold text-center"

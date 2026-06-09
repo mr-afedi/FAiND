@@ -313,6 +313,7 @@ def _get_opposing_candidates(db: Session, source: Item) -> list[Item]:
             Item.status.in_(statuses),
             Item.id != source.id,
             Item.posted_by_id != source.posted_by_id,
+            Item.hidden_by_suspension == False,
             User.status == AccountStatus.ACTIVE,
         )
         .all()
@@ -383,6 +384,9 @@ def run_matching_for_item(db: Session, item_id: uuid.UUID) -> list[PotentialMatc
         return []
 
     if source.status not in _POOL_STATUSES:
+        return []
+
+    if source.hidden_by_suspension or source.posted_by.status != AccountStatus.ACTIVE:
         return []
 
     candidates = _get_opposing_candidates(db, source)
@@ -608,6 +612,40 @@ def pause_matches_for_item(db: Session, item_id: uuid.UUID) -> int:
     return len(matches)
 
 
+def expire_superseded_matches(
+    db: Session,
+    lost_item_id: uuid.UUID,
+    winner_match_id: uuid.UUID,
+) -> int:
+    """
+    After one match is verified for a lost item, close out other open matches
+    so the owner is not prompted to verify again on a different found post.
+    """
+    siblings = (
+        db.query(PotentialMatch)
+        .filter(
+            PotentialMatch.lost_item_id == lost_item_id,
+            PotentialMatch.id != winner_match_id,
+            PotentialMatch.status.in_(
+                (
+                    PotentialMatchStatus.ACTIVE,
+                    PotentialMatchStatus.PENDING_REVIEW,
+                )
+            ),
+        )
+        .all()
+    )
+    for m in siblings:
+        m.status = PotentialMatchStatus.EXPIRED
+    if siblings:
+        logger.info(
+            "expire_superseded_matches: expired %d sibling matches for lost item %s",
+            len(siblings),
+            lost_item_id,
+        )
+    return len(siblings)
+
+
 def resume_matches_for_item(db: Session, item_id: uuid.UUID) -> int:
     """
     On dispute resolution, resume PAUSED matches for this item.
@@ -658,8 +696,22 @@ def _live_matches_for_user_query(db: Session, user_id: uuid.UUID):
         .join(FoundItem, PotentialMatch.found_item_id == FoundItem.id)
         .filter(
             PotentialMatch.status.in_(_LIVE_MATCH_STATUSES),
-            LostItem.status != ItemStatus.ARCHIVED,
-            FoundItem.status != ItemStatus.ARCHIVED,
+            LostItem.status.notin_(
+                (
+                    ItemStatus.ARCHIVED,
+                    ItemStatus.RETURNED,
+                    ItemStatus.CLOSED,
+                    ItemStatus.EXPIRED,
+                )
+            ),
+            FoundItem.status.notin_(
+                (
+                    ItemStatus.ARCHIVED,
+                    ItemStatus.RETURNED,
+                    ItemStatus.CLOSED,
+                    ItemStatus.EXPIRED,
+                )
+            ),
             or_(
                 PotentialMatch.lost_item_id.in_(my_item_ids),
                 PotentialMatch.found_item_id.in_(my_item_ids),

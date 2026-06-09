@@ -157,6 +157,8 @@ class LostItemOwnerResponse(LostItemPublicResponse):
     """Extended response for the item owner; hidden answers are never included."""
 
     warnings: list[str] = []
+    already_submitted: bool = False
+    message: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

@@ -1,54 +1,59 @@
 /**
- * PushPromptBanner — contextual push-permission prompt (Section 11.3).
+ * PushPromptBanner — contextual push-permission prompt (Section 11.3 / 29.2).
  *
- * Shown after a match-found notification arrives (or any notification-worthy
- * event) when the user has not yet granted/denied push permission.
- *
- * Usage:
- *   <PushPromptBanner />
- *
- * The banner stores dismissal in localStorage so it does not nag the user
- * on every render.
+ * Shown only after a notification-worthy event (never on login).
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { usePushNotifications } from '../hooks/usePushNotifications'
 import { useAuth } from '../context/AuthContext'
 import toast from 'react-hot-toast'
 import { Bell } from './icons'
-
-const DISMISSED_KEY = 'faind:push_prompt_dismissed'
+import {
+  dismissPushPrompt,
+  isPushPromptDismissed,
+  isPushPromptReady,
+  PUSH_PROMPT_READY_EVENT,
+} from '../utils/pushPrompt'
 
 export default function PushPromptBanner() {
   const { isAuthenticated } = useAuth()
   const { supported, permissionState, isSubscribed, loading, requestPermissionAndSubscribe } =
     usePushNotifications()
 
-  const [dismissed, setDismissed] = useState(
-    () => localStorage.getItem(DISMISSED_KEY) === 'true'
-  )
+  const [promptReady, setPromptReady] = useState(() => isPushPromptReady())
+  const [dismissed, setDismissed] = useState(() => isPushPromptDismissed())
 
-  // Only show when:
-  //  - User is logged in (never shown to guests — spec §11.3)
-  //  - Push is supported in this browser
-  //  - Permission not yet decided
-  //  - Not already subscribed
-  //  - User hasn't dismissed this banner
-  if (!isAuthenticated || !supported || permissionState !== 'default' || isSubscribed || dismissed) return null
+  useEffect(() => {
+    const onReady = () => setPromptReady(true)
+    window.addEventListener(PUSH_PROMPT_READY_EVENT, onReady)
+    return () => window.removeEventListener(PUSH_PROMPT_READY_EVENT, onReady)
+  }, [])
+
+  if (
+    !isAuthenticated ||
+    !supported ||
+    !promptReady ||
+    permissionState !== 'default' ||
+    isSubscribed ||
+    dismissed
+  ) {
+    return null
+  }
 
   const handleAccept = async () => {
     const ok = await requestPermissionAndSubscribe()
     if (ok) {
-        toast.success('Push notifications enabled! You will be alerted for matches and messages.')
+      toast.success('Push notifications enabled! You will be alerted for matches and messages.')
     } else {
       toast('You can enable push notifications later in Settings.', { icon: <Bell className="w-5 h-5" /> })
     }
+    dismissPushPrompt()
     setDismissed(true)
-    localStorage.setItem(DISMISSED_KEY, 'true')
   }
 
   const handleDismiss = () => {
+    dismissPushPrompt()
     setDismissed(true)
-    localStorage.setItem(DISMISSED_KEY, 'true')
   }
 
   return (
@@ -60,17 +65,19 @@ export default function PushPromptBanner() {
             Turn on push notifications?
           </p>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-            Get alerts for matches and messages on your phone or desktop — even when the app is closed.
+            Get alerts for matches and messages like this on your phone or desktop — even when the app is closed.
           </p>
           <div className="flex gap-2 mt-3">
             <button
+              type="button"
               onClick={handleAccept}
               disabled={loading}
               className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-2 rounded-lg transition-colors disabled:opacity-60"
             >
-              {loading ? 'Enabling…' : 'Enable'}
+              {loading ? 'Enabling…' : 'Accept'}
             </button>
             <button
+              type="button"
               onClick={handleDismiss}
               className="flex-1 border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 text-xs font-semibold py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
             >

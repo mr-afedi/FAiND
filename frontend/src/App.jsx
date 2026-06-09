@@ -1,6 +1,8 @@
 import { Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import PushPromptBanner from './components/PushPromptBanner'
+import PushPromptTrigger from './components/PushPromptTrigger'
+import OfflineBanner from './components/OfflineBanner'
 import ChatRealtimeBridge from './components/ChatRealtimeBridge'
 
 // Pages
@@ -19,6 +21,7 @@ import FoundItemsPage      from './pages/FoundItemsPage'
 import ReturnedItemsPage   from './pages/ReturnedItemsPage'
 import ItemDetailPage      from './pages/ItemDetailPage'
 import ItemUnavailablePage from './pages/ItemUnavailablePage'
+import OfflinePage from './pages/OfflinePage'
 import VerifyOwnershipPage from './pages/VerifyOwnershipPage'
 import IHaveThisItemPage   from './pages/IHaveThisItemPage'
 import ThisMightBeMinePage  from './pages/ThisMightBeMinePage'
@@ -55,6 +58,8 @@ export default function App() {
   return (
     <AuthProvider>
       {/* Global overlays — available on every page */}
+      <OfflineBanner />
+      <PushPromptTrigger />
       <PushPromptBanner />
       <ChatRealtimeBridge />
       <Routes>
@@ -86,6 +91,7 @@ export default function App() {
         <Route path="/returned"    element={<ReturnedItemsPage />} />
         <Route path="/items/:itemId" element={<ItemDetailPage />} />
         <Route path="/item-unavailable" element={<ItemUnavailablePage />} />
+        <Route path="/offline" element={<OfflinePage />} />
 
         {/* Feature I — Path A ownership verification */}
         <Route path="/verify-ownership/:matchId" element={

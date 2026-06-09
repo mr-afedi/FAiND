@@ -603,6 +603,11 @@ def submit_path_c(
                 "Your claim scored highly, but another claimant was already approved. "
                 "An admin will review — chat is not unlocked yet."
             )
+            from app.services import admin_notification_service
+
+            admin_notification_service.notify_admins_verification_dispute(
+                db, match_id=match.id, lost_item_id=bridge_lost.id
+            )
             notification_service.notify_path_c_under_review(
                 db,
                 claimant_id=user.id,
@@ -647,6 +652,11 @@ def submit_path_c(
         bridge_lost.status = ItemStatus.UNDER_VERIFICATION
         if found_item.status == ItemStatus.FOUND:
             found_item.status = ItemStatus.UNDER_VERIFICATION
+        from app.services import admin_notification_service
+
+        admin_notification_service.notify_admins_claim_in_review(
+            db, match_id=match.id, path="path_c"
+        )
         notification_service.notify_path_c_under_review(
             db,
             claimant_id=user.id,

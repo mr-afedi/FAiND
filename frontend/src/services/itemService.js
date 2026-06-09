@@ -57,10 +57,46 @@ export async function getCampusZones() {
 
 // ── Lost item CRUD ────────────────────────────────────────────────────────────
 
+const LOST_SUBMIT_TIMEOUT_MS = 60_000
+const LOST_IDEMPOTENCY_WINDOW_MS = 60_000
+
 export async function createLostItem(payload) {
-  const { data } = await api.post('/items/lost', payload)
-  return data
+  const { data, status } = await api.post('/items/lost', payload, {
+    timeout: LOST_SUBMIT_TIMEOUT_MS,
+  })
+  return { ...data, _httpStatus: status }
 }
+
+function isAmbiguousSubmitError(err) {
+  if (!err) return false
+  if (err.code === 'ECONNABORTED') return true
+  if (!err.response) return true
+  return false
+}
+
+/**
+ * After timeout/network failure, check if the lost item was created anyway.
+ */
+export async function findRecentLostItemMatch({
+  category,
+  location_label,
+  public_description,
+}) {
+  const { data } = await api.get('/items/my/lost', { params: { limit: 20 } })
+  const since = Date.now() - LOST_IDEMPOTENCY_WINDOW_MS
+  const descNorm = (public_description || '').trim().toLowerCase()
+  const locNorm = (location_label || 'Unknown Location').trim().toLowerCase()
+
+  return (data.items || []).find((item) => {
+    if (item.category !== category) return false
+    if (new Date(item.created_at).getTime() < since) return false
+    if ((item.location_label || 'Unknown Location').trim().toLowerCase() !== locNorm) return false
+    if (descNorm && item.public_description?.trim().toLowerCase() !== descNorm) return false
+    return true
+  }) || null
+}
+
+export { isAmbiguousSubmitError, LOST_IDEMPOTENCY_WINDOW_MS }
 
 /** V4.3 — warn when hidden answers are too similar to public description */
 export async function checkLostHiddenAnswers(payload) {

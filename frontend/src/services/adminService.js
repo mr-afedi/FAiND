@@ -71,6 +71,20 @@ export async function rejectClaim(matchId, note) {
   return data
 }
 
+export async function requestClaimInfo(matchId, note) {
+  const { data } = await api.post(
+    `/admin/claims/${matchId}/request-info`,
+    { note },
+    adminConfig(),
+  )
+  return data
+}
+
+export async function getClaimDetail(matchId) {
+  const { data } = await api.get(`/admin/claims/${matchId}`, adminConfig())
+  return data.detail
+}
+
 export async function listDisputes() {
   const { data } = await api.get('/admin/disputes', adminConfig())
   return data
@@ -83,6 +97,23 @@ export async function resolveDispute(returnId, outcome, note) {
     adminConfig(),
   )
   return data
+}
+
+export async function resolveVerificationDispute(matchId, winnerMatchId, note) {
+  const { data } = await api.post(
+    `/admin/disputes/verification/${matchId}/resolve`,
+    { winner_match_id: winnerMatchId, note },
+    adminConfig(),
+  )
+  return data
+}
+
+export async function getDisputeDetail(disputeId, disputeType) {
+  const { data } = await api.get(`/admin/disputes/${disputeId}`, {
+    ...adminConfig(),
+    params: disputeType ? { dispute_type: disputeType } : undefined,
+  })
+  return data.detail
 }
 
 export async function listReports(status = 'pending') {
@@ -118,6 +149,19 @@ export async function suspendUserReport(reportId) {
   return data
 }
 
+export async function suppressReporter(userId) {
+  const { data } = await api.post(`/admin/reports/reporters/${userId}/suppress`, {}, adminConfig())
+  return data
+}
+
+export async function getReportDetail(reportId, reportType) {
+  const { data } = await api.get(`/admin/reports/${reportId}`, {
+    ...adminConfig(),
+    params: { report_type: reportType },
+  })
+  return data.detail
+}
+
 export async function listFraudAlerts() {
   const { data } = await api.get('/admin/fraud/alerts', adminConfig())
   return data
@@ -128,8 +172,27 @@ export async function confirmFraud(userId) {
   return data
 }
 
-export async function listPostsModeration() {
-  const { data } = await api.get('/admin/posts', adminConfig())
+export async function clearFraudFlag(userId) {
+  const { data } = await api.post(`/admin/fraud/users/${userId}/clear`, {}, adminConfig())
+  return data
+}
+
+export async function allowVerification(userId) {
+  const { data } = await api.post(
+    `/admin/fraud/users/${userId}/allow-verification`,
+    {},
+    adminConfig(),
+  )
+  return data
+}
+
+export async function getFraudDetail(userId) {
+  const { data } = await api.get(`/admin/fraud/${userId}/detail`, adminConfig())
+  return data.detail
+}
+
+export async function listPostsModeration(params = {}) {
+  const { data } = await api.get('/admin/posts', { ...adminConfig(), params })
   return data
 }
 
@@ -142,8 +205,27 @@ export async function forceClosePost(itemId, reason) {
   return data
 }
 
-export async function listAdminLogs() {
-  const { data } = await api.get('/admin/logs', adminConfig())
+export async function removePost(itemId, reason) {
+  const { data } = await api.post(
+    `/admin/posts/${itemId}/remove`,
+    { reason },
+    adminConfig(),
+  )
+  return data
+}
+
+export async function getPostDetail(itemId) {
+  const { data } = await api.get(`/admin/posts/${itemId}`, adminConfig())
+  return data.detail
+}
+
+export async function getUserDetail(userId) {
+  const { data } = await api.get(`/admin/users/${userId}/detail`, adminConfig())
+  return data.detail
+}
+
+export async function listAdminLogs(params = {}) {
+  const { data } = await api.get('/admin/logs', { ...adminConfig(), params })
   return data
 }
 

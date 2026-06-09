@@ -81,9 +81,16 @@ class Item(Base):
     # Lifecycle (Section 21)
     expiry_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     extensions_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    expiry_reminder_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deletion_queued_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # Admin flags
     admin_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    hidden_by_suspension: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Path B bridge found item — hidden from public browse (Feature J)
     path_b_bridge: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

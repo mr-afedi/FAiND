@@ -137,6 +137,9 @@ def file_dispute(
         filed_by_id=user.id,
         tip_frozen=record.tip_frozen,
     )
+    from app.services import admin_notification_service
+
+    admin_notification_service.notify_admins_return_disputed(db, return_id=record.id)
     if record.tip_frozen:
         notify_admins_dispute_with_tip(db, record)
     db.commit()
@@ -222,7 +225,7 @@ def notify_admins_dispute_with_tip(db: Session, record: ItemReturn) -> None:
         "A return dispute was filed and an appreciation payment may need review. "
         f"Return ID: {record.id}"
     )
-    link = f"/returns/{record.id}"
+    link = f"admin:disputes:{record.id}"
     for admin in admins:
         notification_service.create_notification(
             db,

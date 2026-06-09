@@ -1,45 +1,64 @@
 """
-APScheduler setup — scheduled lifecycle jobs (Section 21.7).
-
-Feature I wires the hourly POTENTIAL_MATCH timeout job.
-Feature S will add remaining jobs (expiry reminders, etc.).
+APScheduler setup — scheduled lifecycle jobs (Section 21.7, Feature S).
 """
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.core.database import SessionLocal
-from app.services import verification_service, return_service
+from app.services import lifecycle_service, return_service, verification_service
 
 _scheduler: BackgroundScheduler | None = None
 
 
-def _run_return_lifecycle_job() -> None:
+def _run_hourly_lifecycle_job() -> None:
     db = SessionLocal()
     try:
-        archived = return_service.archive_expired_returned_items(db)
-        reminders = return_service.process_return_reminders(db)
-        if archived or reminders:
+        expired_items = lifecycle_service.expire_items_past_deadline(db)
+        expired_matches = verification_service.expire_stale_potential_matches(db)
+        if expired_items or expired_matches:
             print(
-                f"[Scheduler] Returns: archived={archived}, reminders/flags={reminders}",
+                f"[Scheduler] Hourly: expired_items={expired_items}, "
+                f"stale_matches={expired_matches}",
                 flush=True,
             )
     except Exception as exc:
-        print(f"[Scheduler] return lifecycle job failed: {exc}", flush=True)
+        print(f"[Scheduler] hourly lifecycle job failed: {exc}", flush=True)
         db.rollback()
     finally:
         db.close()
 
 
-def _run_match_timeout_job() -> None:
+def _run_daily_midnight_lifecycle_job() -> None:
     db = SessionLocal()
     try:
-        count = verification_service.expire_stale_potential_matches(db)
-        if count:
-            print(f"[Scheduler] Expired {count} stale POTENTIAL_MATCH record(s)", flush=True)
+        reminders = lifecycle_service.send_expiry_reminders(db)
+        tipping_closed = lifecycle_service.close_expired_tipping_windows(db)
+        disputes_closed = lifecycle_service.close_expired_dispute_windows(db)
+        queued = lifecycle_service.queue_eligible_items_for_deletion(db)
+        resumed = lifecycle_service.resume_paused_matches_on_resolved_disputes(db)
+        return_reminders = return_service.process_return_reminders(db)
+        if any(
+            (
+                reminders,
+                tipping_closed,
+                disputes_closed,
+                queued,
+                resumed,
+                return_reminders,
+            )
+        ):
+            print(
+                "[Scheduler] Daily: "
+                f"expiry_reminders={reminders}, tipping_archived={tipping_closed}, "
+                f"dispute_status_fixes={disputes_closed}, deletion_queued={queued}, "
+                f"matches_resumed={resumed}, return_reminders={return_reminders}",
+                flush=True,
+            )
     except Exception as exc:
-        print(f"[Scheduler] match timeout job failed: {exc}", flush=True)
+        print(f"[Scheduler] daily lifecycle job failed: {exc}", flush=True)
         db.rollback()
     finally:
         db.close()
@@ -52,21 +71,22 @@ def start_scheduler() -> BackgroundScheduler:
 
     scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(
-        _run_match_timeout_job,
+        _run_hourly_lifecycle_job,
         trigger=IntervalTrigger(hours=1),
-        id="expire_stale_potential_matches",
+        id="hourly_lifecycle",
         replace_existing=True,
     )
     scheduler.add_job(
-        _run_return_lifecycle_job,
-        trigger=IntervalTrigger(hours=6),
-        id="return_lifecycle",
+        _run_daily_midnight_lifecycle_job,
+        trigger=CronTrigger(hour=0, minute=0),
+        id="daily_midnight_lifecycle",
         replace_existing=True,
     )
     scheduler.start()
     _scheduler = scheduler
     print(
-        "[Scheduler] APScheduler started — hourly match timeout, 6h return lifecycle",
+        "[Scheduler] APScheduler started — hourly item/match expiry, "
+        "daily midnight lifecycle (reminders, windows, deletion queue)",
         flush=True,
     )
     return scheduler

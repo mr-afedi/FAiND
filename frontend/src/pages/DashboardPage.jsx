@@ -9,6 +9,7 @@ import NavBar from '../components/NavBar'
 import { getMyMatches } from '../services/matchService'
 import { listMyReturns } from '../services/returnService'
 import { invalidateAfterItemChange } from '../utils/queryCache'
+import { matchNeedsVerification, matchVerificationComplete } from '../utils/matchSelection'
 import {
   TRUST_EVENT_META,
   TrustEventIcon,
@@ -363,7 +364,7 @@ function MatchRow({ match }) {
         </div>
       </div>
 
-      {isLostOwner && status === 'active' && (
+      {isLostOwner && matchNeedsVerification(match) && (
         <Link
           to={`/verify-ownership/${match.id}`}
           className="btn-primary text-sm py-2 w-full sm:w-auto text-center"
@@ -376,7 +377,7 @@ function MatchRow({ match }) {
           Your verification is under admin review. We&apos;ll notify you when decided.
         </p>
       )}
-      {status === 'verified' && match.conversation_id && (
+      {matchVerificationComplete(match) && match.conversation_id && (
         <div className="flex flex-col sm:flex-row gap-2">
           <Link
             to={`/returns/confirm/${match.id}`}

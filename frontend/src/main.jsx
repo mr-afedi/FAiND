@@ -7,8 +7,16 @@ import App from './App'
 import './index.css'
 import { ThemeProvider } from './context/ThemeContext'
 
-// Register service worker (required for Web Push in dev + production)
-registerSW({ immediate: true })
+// Register service worker (Section 29 — Web Push + offline shell)
+registerSW({
+  immediate: true,
+  onOfflineReady() {
+    console.info('[PWA] App shell cached — offline fallback available.')
+  },
+  onNeedRefresh() {
+    console.info('[PWA] New version available — refresh to update.')
+  },
+})
 
 const queryClient = new QueryClient({
   defaultOptions: {

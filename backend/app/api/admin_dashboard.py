@@ -1,5 +1,6 @@
 """Admin dashboard API — Feature R (Section 26)."""
 import uuid
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -22,13 +23,16 @@ from app.schemas.admin import (
     AdminLogsResponse,
     AdminLogItem,
     AdminActionResult,
+    AdminDetailResponse,
     PromoteAdminRequest,
     SuspendUserRequest,
     ResolveDisputeRequest,
+    ResolveVerificationDisputeRequest,
     RejectClaimRequest,
     ForceClosePostRequest,
+    RequestMoreInfoRequest,
 )
-from app.services import admin_dashboard_service
+from app.services import admin_dashboard_service, admin_detail_service
 
 router = APIRouter(prefix="/admin", tags=["admin-dashboard"])
 
@@ -117,6 +121,29 @@ def reject_claim(
     )
 
 
+@router.post("/claims/{match_id}/request-info", response_model=AdminActionResult)
+def request_claim_info(
+    match_id: uuid.UUID,
+    payload: RequestMoreInfoRequest,
+    admin: User = Depends(require_admin_access),
+    db: Session = Depends(get_db),
+):
+    return AdminActionResult(
+        **admin_dashboard_service.request_more_info_claim(
+            db, match_id, admin, payload.note
+        )
+    )
+
+
+@router.get("/claims/{match_id}", response_model=AdminDetailResponse)
+def claim_detail(
+    match_id: uuid.UUID,
+    _admin: User = Depends(require_admin_access),
+    db: Session = Depends(get_db),
+):
+    return AdminDetailResponse(detail=admin_detail_service.get_claim_detail(db, match_id))
+
+
 @router.get("/disputes", response_model=DisputesQueueResponse)
 def disputes_queue(
     limit: int = Query(50, ge=1, le=100),
@@ -125,6 +152,20 @@ def disputes_queue(
 ):
     rows = admin_dashboard_service.list_disputes_queue(db, limit=limit)
     return DisputesQueueResponse(disputes=[DisputeQueueItem.model_validate(r) for r in rows])
+
+
+@router.get("/disputes/{dispute_id}", response_model=AdminDetailResponse)
+def dispute_detail(
+    dispute_id: uuid.UUID,
+    dispute_type: Optional[str] = Query(None),
+    _admin: User = Depends(require_admin_access),
+    db: Session = Depends(get_db),
+):
+    return AdminDetailResponse(
+        detail=admin_detail_service.get_dispute_detail(
+            db, dispute_id, dispute_type=dispute_type
+        )
+    )
 
 
 @router.post("/disputes/{return_id}/resolve", response_model=AdminActionResult)
@@ -145,14 +186,92 @@ def resolve_dispute(
     )
 
 
-@router.get("/posts", response_model=PostsModerationResponse)
-def posts_moderation(
-    limit: int = Query(50, ge=1, le=100),
+@router.post("/disputes/verification/{match_id}/resolve", response_model=AdminActionResult)
+def resolve_verification_dispute(
+    match_id: uuid.UUID,
+    payload: ResolveVerificationDisputeRequest,
     admin: User = Depends(require_admin_access),
     db: Session = Depends(get_db),
 ):
-    rows = admin_dashboard_service.list_posts_moderation(db, limit=limit)
-    return PostsModerationResponse(posts=[PostModerationItem.model_validate(r) for r in rows])
+    return AdminActionResult(
+        **admin_dashboard_service.resolve_verification_dispute(
+            db,
+            match_id,
+            admin,
+            winner_match_id=payload.winner_match_id,
+            note=payload.note,
+        )
+    )
+
+
+@router.get("/reports/{report_id}", response_model=AdminDetailResponse)
+def report_detail(
+    report_id: uuid.UUID,
+    report_type: str = Query(..., pattern="^(post|user)$"),
+    _admin: User = Depends(require_admin_access),
+    db: Session = Depends(get_db),
+):
+    return AdminDetailResponse(
+        detail=admin_detail_service.get_report_detail(
+            db, report_id, report_type=report_type
+        )
+    )
+
+
+@router.get("/users/{user_id}/detail", response_model=AdminDetailResponse)
+def user_detail(
+    user_id: uuid.UUID,
+    _admin: User = Depends(require_admin_access),
+    db: Session = Depends(get_db),
+):
+    return AdminDetailResponse(detail=admin_detail_service.get_user_detail(db, user_id))
+
+
+@router.get("/fraud/{user_id}/detail", response_model=AdminDetailResponse)
+def fraud_detail(
+    user_id: uuid.UUID,
+    _admin: User = Depends(require_admin_access),
+    db: Session = Depends(get_db),
+):
+    return AdminDetailResponse(detail=admin_detail_service.get_fraud_detail(db, user_id))
+
+
+@router.get("/posts", response_model=PostsModerationResponse)
+def posts_moderation(
+    search: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    admin: User = Depends(require_admin_access),
+    db: Session = Depends(get_db),
+):
+    data = admin_dashboard_service.list_posts_moderation(
+        db, limit=limit, offset=offset, search=search
+    )
+    return PostsModerationResponse(
+        posts=[PostModerationItem.model_validate(r) for r in data["posts"]],
+        total=data["total"],
+    )
+
+
+@router.get("/posts/{item_id}", response_model=AdminDetailResponse)
+def post_detail(
+    item_id: uuid.UUID,
+    _admin: User = Depends(require_admin_access),
+    db: Session = Depends(get_db),
+):
+    return AdminDetailResponse(detail=admin_detail_service.get_post_detail(db, item_id))
+
+
+@router.post("/posts/{item_id}/remove", response_model=AdminActionResult)
+def remove_post(
+    item_id: uuid.UUID,
+    payload: ForceClosePostRequest,
+    admin: User = Depends(require_admin_access),
+    db: Session = Depends(get_db),
+):
+    return AdminActionResult(
+        **admin_dashboard_service.remove_post(db, item_id, admin, payload.reason)
+    )
 
 
 @router.post("/posts/{item_id}/force-close", response_model=AdminActionResult)
@@ -170,10 +289,22 @@ def force_close_post(
 @router.get("/logs", response_model=AdminLogsResponse)
 def admin_logs(
     limit: int = Query(100, ge=1, le=200),
-    admin: User = Depends(require_admin_access),
+    admin_id: Optional[uuid.UUID] = None,
+    action: Optional[str] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    root: User = Depends(require_root_admin_access),
     db: Session = Depends(get_db),
 ):
-    rows = admin_dashboard_service.list_admin_logs(db, admin, limit=limit)
+    rows = admin_dashboard_service.list_admin_logs(
+        db,
+        root,
+        limit=limit,
+        admin_id_filter=admin_id,
+        action_filter=action,
+        date_from=date_from,
+        date_to=date_to,
+    )
     return AdminLogsResponse(logs=[AdminLogItem.model_validate(r) for r in rows])
 
 

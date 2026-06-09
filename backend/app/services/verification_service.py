@@ -182,13 +182,71 @@ def _conversation_for_match(db: Session, match_id: uuid.UUID) -> Conversation | 
     )
 
 
-def get_path_a_form(db: Session, match_id: uuid.UUID, user: User) -> PathAFormResponse:
-    match = _get_match_for_owner(db, match_id, user)
-    if match.status not in (PotentialMatchStatus.ACTIVE, PotentialMatchStatus.PENDING_REVIEW):
+def _unlocked_conversation(db: Session, match_id: uuid.UUID) -> Conversation | None:
+    return (
+        db.query(Conversation)
+        .filter(
+            Conversation.potential_match_id == match_id,
+            Conversation.status == ConversationStatus.UNLOCKED,
+        )
+        .first()
+    )
+
+
+def _assert_match_open_for_verification(db: Session, match: PotentialMatch, user: User) -> None:
+    """Block re-verification after approval or when another match is already verified."""
+    if match.status == PotentialMatchStatus.VERIFIED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Verification already approved. Open chat to continue.",
+        )
+
+    if match.status == PotentialMatchStatus.PENDING_REVIEW:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Your verification is under admin review.",
+        )
+
+    if match.status not in (PotentialMatchStatus.ACTIVE,):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This match is no longer open for verification.",
         )
+
+    verified_sibling = (
+        db.query(PotentialMatch)
+        .filter(
+            PotentialMatch.lost_item_id == match.lost_item_id,
+            PotentialMatch.id != match.id,
+            PotentialMatch.status == PotentialMatchStatus.VERIFIED,
+        )
+        .first()
+    )
+    if verified_sibling:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You already verified ownership on another matched item.",
+        )
+
+    approved_attempt = (
+        db.query(VerificationAttempt)
+        .filter(
+            VerificationAttempt.potential_match_id == match.id,
+            VerificationAttempt.user_id == user.id,
+            VerificationAttempt.result == VerificationResult.APPROVED,
+        )
+        .first()
+    )
+    if approved_attempt and _unlocked_conversation(db, match.id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Verification already approved. Open chat to continue.",
+        )
+
+
+def get_path_a_form(db: Session, match_id: uuid.UUID, user: User) -> PathAFormResponse:
+    match = _get_match_for_owner(db, match_id, user)
+    _assert_match_open_for_verification(db, match, user)
 
     used = _attempts_in_window(db, user.id, match.lost_item_id)
     remaining = max(0, MAX_ATTEMPTS_24H - used)
@@ -237,10 +295,22 @@ def get_verification_status(
     )
     conv = _conversation_for_match(db, match_id)
 
+    verified_sibling = (
+        db.query(PotentialMatch)
+        .filter(
+            PotentialMatch.lost_item_id == match.lost_item_id,
+            PotentialMatch.id != match.id,
+            PotentialMatch.status == PotentialMatchStatus.VERIFIED,
+        )
+        .first()
+    )
+    unlocked = conv if conv and conv.status == ConversationStatus.UNLOCKED else None
     can_verify = (
-        match.status in (PotentialMatchStatus.ACTIVE, PotentialMatchStatus.PENDING_REVIEW)
+        match.status == PotentialMatchStatus.ACTIVE
         and remaining > 0
-        and match.status != PotentialMatchStatus.VERIFIED
+        and not unlocked
+        and not verified_sibling
+        and not (latest and latest.result == VerificationResult.APPROVED)
     )
 
     return VerificationStatusResponse(
@@ -248,10 +318,10 @@ def get_verification_status(
         match_status=match.status.value,
         latest_result=latest.result if latest else None,
         latest_score=latest.ownership_score if latest else None,
-        conversation_id=conv.id if conv and conv.status == ConversationStatus.UNLOCKED else None,
+        conversation_id=unlocked.id if unlocked else None,
         attempts_used_24h=used,
         attempts_remaining_24h=remaining,
-        can_verify=can_verify and match.status != PotentialMatchStatus.VERIFIED,
+        can_verify=can_verify,
     )
 
 
@@ -264,6 +334,9 @@ def submit_path_a(
     fraud_service.assert_can_attempt_verification(db, user)
     match = _get_match_for_owner(db, match_id, user)
 
+    if match.status != PotentialMatchStatus.VERIFIED:
+        _assert_match_open_for_verification(db, match, user)
+
     if match.status == PotentialMatchStatus.VERIFIED:
         conv = _conversation_for_match(db, match_id)
         return PathASubmitResponse(
@@ -275,7 +348,7 @@ def submit_path_a(
             message="Verification already approved. Chat is unlocked.",
         )
 
-    if match.status not in (PotentialMatchStatus.ACTIVE, PotentialMatchStatus.PENDING_REVIEW):
+    if match.status != PotentialMatchStatus.ACTIVE:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This match is no longer open for verification.",
@@ -349,6 +422,11 @@ def submit_path_a(
                 "Multiple matches were approved for this item. "
                 "An admin will review — chat is not unlocked yet."
             )
+            from app.services import admin_notification_service
+
+            admin_notification_service.notify_admins_verification_dispute(
+                db, match_id=match.id, lost_item_id=match.lost_item_id
+            )
             notification_service.notify_verification_review(
                 db,
                 user_id=user.id,
@@ -382,11 +460,19 @@ def submit_path_a(
                 lost_item_id=match.lost_item_id,
                 found_item_id=match.found_item_id,
             )
+            matching_service.expire_superseded_matches(
+                db, match.lost_item_id, match.id
+            )
             message = "Verification passed! Chat is now unlocked."
 
     elif result == VerificationResult.REVIEW:
         match.status = PotentialMatchStatus.PENDING_REVIEW
         match.lost_item.status = ItemStatus.UNDER_VERIFICATION
+        from app.services import admin_notification_service
+
+        admin_notification_service.notify_admins_claim_in_review(
+            db, match_id=match.id, path="path_a"
+        )
         notification_service.notify_verification_review(
             db,
             user_id=user.id,

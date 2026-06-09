@@ -17,3 +17,6 @@
 - [x] Feature P — Post and User Reporting
 - [x] Feature Q — Tipping (Paystack)
 - [x] Feature R — Admin Dashboard
+- [x] Feature S — Post Lifecycle + APScheduler
+- [x] Feature T — Suspension System
+- [x] Feature U — PWA Setup

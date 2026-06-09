@@ -10,7 +10,14 @@ export default defineConfig({
       srcDir: 'src',
       filename: 'sw.js',
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
+      includeAssets: [
+        'favicon.ico',
+        'apple-touch-icon.png',
+        'masked-icon.svg',
+        'offline.html',
+        'pwa-192x192.png',
+        'pwa-512x512.png',
+      ],
       manifest: {
         name: 'FAiND',
         short_name: 'FAiND',
@@ -50,6 +57,34 @@ export default defineConfig({
       },
     }),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+          if (id.includes('react-dom') || id.includes('/react/')) {
+            return 'react-vendor'
+          }
+          if (id.includes('react-router') || id.includes('@remix-run/router')) {
+            return 'react-router'
+          }
+          if (id.includes('@tanstack/react-query')) {
+            return 'tanstack-query'
+          }
+          if (id.includes('/axios/')) {
+            return 'axios'
+          }
+          if (id.includes('lucide-react')) {
+            return 'lucide-react'
+          }
+          if (id.includes('react-hot-toast') || id.includes('/goober/')) {
+            return 'react-hot-toast'
+          }
+          return undefined
+        },
+      },
+    },
+  },
   server: {
     proxy: {
       '/api': {

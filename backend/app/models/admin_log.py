@@ -24,6 +24,9 @@ class AdminActionType(str, PyEnum):
     WARN_USER = "warn_user"
     SUPPRESS_REPORTER = "suppress_reporter"
     CONFIRM_FRAUD = "confirm_fraud"
+    CLEAR_FRAUD_FLAG = "clear_fraud_flag"
+    ALLOW_VERIFICATION = "allow_verification"
+    REQUEST_MORE_INFO = "request_more_info"
     TRUST_ADJUSTMENT = "trust_adjustment"
 
 

@@ -49,6 +49,8 @@ def get_risk_tier(score: int) -> str:
 def assert_can_attempt_verification(db: Session, user: User) -> None:
     """Section 18.2 — block new verifications/claims at 100+ risk."""
     db.refresh(user)
+    if getattr(user, "fraud_verification_override", False):
+        return
     if user.fraud_risk_score >= BLOCK_THRESHOLD:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -345,6 +347,56 @@ def admin_confirm_fraud(
     )
 
 
+def admin_clear_fraud_flag(
+    db: Session,
+    *,
+    target_user_id: uuid.UUID,
+    admin: User,
+) -> FraudEvent:
+    """Reset fraud risk to 0 and log admin clear."""
+    target = db.query(User).filter(User.id == target_user_id).first()
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    delta = -target.fraud_risk_score
+    if delta == 0:
+        delta = 0
+    return apply_fraud_delta(
+        db,
+        user_id=target.id,
+        university_id=target.university_id,
+        delta=delta,
+        signal_type=FraudSignalType.ADMIN_CLEARED_FLAG,
+        reference_id=target.id,
+        applied_by_id=admin.id,
+        note="Admin cleared fraud flag",
+    )
+
+
+def admin_allow_verification(
+    db: Session,
+    *,
+    target_user_id: uuid.UUID,
+    admin: User,
+) -> User:
+    """Allow blocked user to attempt verification again."""
+    target = db.query(User).filter(User.id == target_user_id).first()
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    target.fraud_verification_override = True
+    apply_fraud_delta(
+        db,
+        user_id=target.id,
+        university_id=target.university_id,
+        delta=0,
+        signal_type=FraudSignalType.ADMIN_VERIFICATION_OVERRIDE,
+        reference_id=target.id,
+        applied_by_id=admin.id,
+        note="Admin allowed verification attempts",
+    )
+    db.flush()
+    return target
+
+
 def _notify_admins_fraud_alert(
     db: Session,
     *,
@@ -366,7 +418,7 @@ def _notify_admins_fraud_alert(
         f"Fraud signal: {signal_type.value.replace('_', ' ')}. "
         f"User risk score is now {score_after} ({tier})."
     )
-    link = f"/admin/fraud?user={user_id}"
+    link = f"admin:fraud:{user_id}"
     for admin in admins:
         notification_service.notify_fraud_alert(
             db,
@@ -381,21 +433,10 @@ def _notify_admins_fraud_alert(
 
 
 def list_fraud_alerts(db: Session, *, limit: int = 50) -> list[dict]:
-    """Users at elevated+ risk or with a fraud event in the last 7 days."""
-    since = datetime.now(timezone.utc) - timedelta(days=7)
-    recent_user_ids = (
-        select(FraudEvent.user_id)
-        .where(FraudEvent.created_at >= since)
-        .distinct()
-    )
+    """Users with fraud risk score above 30 (elevated tier and above)."""
     users = (
         db.query(User)
-        .filter(
-            or_(
-                User.fraud_risk_score >= ELEVATED_THRESHOLD,
-                User.id.in_(recent_user_ids),
-            )
-        )
+        .filter(User.fraud_risk_score > 30)
         .order_by(User.fraud_risk_score.desc())
         .limit(limit)
         .all()

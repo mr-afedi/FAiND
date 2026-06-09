@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, List
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -149,16 +149,21 @@ def check_lost_hidden_answers(
     return CheckHiddenAnswersResponse(warnings=item_service.check_hidden_answers(payload))
 
 
-@router.post("/lost", response_model=LostItemOwnerResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/lost", response_model=LostItemOwnerResponse)
 def create_lost_item(
     payload: CreateLostItemRequest,
     background_tasks: BackgroundTasks,
+    response: Response,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     try:
         result = item_service.create_lost_item(db, current_user, payload)
-        background_tasks.add_task(run_matching_background, result.id)
+        if result.already_submitted:
+            response.status_code = status.HTTP_200_OK
+        else:
+            response.status_code = status.HTTP_201_CREATED
+            background_tasks.add_task(run_matching_background, result.id)
         return result
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))

@@ -2,6 +2,7 @@
  * Shared React Query cache invalidation — call after mutations so UI refreshes
  * without a manual page reload.
  */
+import { markPushPromptReady } from './pushPrompt'
 
 export function invalidateAfterItemCreate(queryClient, { type = 'lost' } = {}) {
   queryClient.invalidateQueries({ queryKey: [type === 'lost' ? 'my-lost-items' : 'my-found-items'] })
@@ -33,6 +34,7 @@ export function invalidateAfterPathC(queryClient, { foundItemId, matchId } = {})
   }
   queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
   queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
+  markPushPromptReady()
   if (matchId) {
     queryClient.invalidateQueries({ queryKey: ['path-a-form', matchId] })
   }
@@ -49,6 +51,7 @@ export function invalidateAfterPathB(queryClient, { lostItemId, matchId } = {}) 
   }
   queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
   queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
+  markPushPromptReady()
   if (matchId) {
     queryClient.invalidateQueries({ queryKey: ['path-a-form', matchId] })
   }
@@ -59,6 +62,7 @@ export function invalidateAfterVerification(queryClient, { lostItemId, foundItem
   queryClient.invalidateQueries({ queryKey: ['my-matches-for-item'] })
   if (matchId) {
     queryClient.invalidateQueries({ queryKey: ['path-a-form', matchId] })
+    queryClient.invalidateQueries({ queryKey: ['path-a-status', matchId] })
   }
   if (lostItemId) {
     queryClient.invalidateQueries({ queryKey: ['item', lostItemId] })
@@ -69,6 +73,7 @@ export function invalidateAfterVerification(queryClient, { lostItemId, foundItem
   queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
   queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
   queryClient.invalidateQueries({ queryKey: ['my-trust-events'] })
+  markPushPromptReady()
 }
 
 export function invalidateAfterProfileUpdate(queryClient) {

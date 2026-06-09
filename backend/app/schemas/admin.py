@@ -51,7 +51,7 @@ class ClaimQueueItem(BaseModel):
     match_score: float
     status: str
     created_at: datetime
-    claimant_id: uuid.UUID
+    claimant_id: Optional[uuid.UUID] = None
     claimant_name: str
     lost_item_id: uuid.UUID
     found_item_id: uuid.UUID
@@ -65,12 +65,14 @@ class ClaimsQueueResponse(BaseModel):
 
 
 class DisputeQueueItem(BaseModel):
-    return_id: uuid.UUID
-    match_id: uuid.UUID
-    returned_at: datetime
-    dispute_filed_at: datetime
+    dispute_id: uuid.UUID
+    dispute_type: str
+    return_id: Optional[uuid.UUID] = None
+    match_id: Optional[uuid.UUID] = None
+    returned_at: Optional[datetime] = None
+    dispute_filed_at: Optional[datetime] = None
     dispute_reason: str
-    filed_by_id: uuid.UUID
+    filed_by_id: Optional[uuid.UUID] = None
     filed_by_name: str
     lost_owner_name: str
     found_owner_name: str
@@ -92,11 +94,13 @@ class PostModerationItem(BaseModel):
     posted_by_id: uuid.UUID
     admin_locked: bool
     pending_reports: int
+    flagged: bool = False
     created_at: datetime
 
 
 class PostsModerationResponse(BaseModel):
     posts: list[PostModerationItem]
+    total: int = 0
 
 
 class AdminLogItem(BaseModel):
@@ -132,9 +136,22 @@ class ResolveDisputeRequest(BaseModel):
     note: str = Field(..., min_length=10, max_length=2000)
 
 
+class ResolveVerificationDisputeRequest(BaseModel):
+    winner_match_id: uuid.UUID
+    note: str = Field(..., min_length=10, max_length=2000)
+
+
 class RejectClaimRequest(BaseModel):
     note: Optional[str] = Field(None, max_length=500)
 
 
 class ForceClosePostRequest(BaseModel):
     reason: Optional[str] = Field(None, max_length=500)
+
+
+class RequestMoreInfoRequest(BaseModel):
+    note: str = Field(..., min_length=10, max_length=2000)
+
+
+class AdminDetailResponse(BaseModel):
+    detail: dict[str, Any]

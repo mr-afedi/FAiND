@@ -22,6 +22,8 @@ class FraudSignalType(str, PyEnum):
     UNUSUAL_CLAIM_VOLUME = "unusual_claim_volume"
     USER_REPORT_RECEIVED = "user_report_received"
     ADMIN_CONFIRMED_FRAUD = "admin_confirmed_fraud"
+    ADMIN_CLEARED_FLAG = "admin_cleared_flag"
+    ADMIN_VERIFICATION_OVERRIDE = "admin_verification_override"
     GRADUAL_IMPROVEMENT = "gradual_improvement"
     RISK_TIER_HIGH = "risk_tier_high"
 

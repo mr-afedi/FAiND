@@ -170,6 +170,14 @@ def _finalize_return(
         found_item_id=record.found_item_id,
     )
 
+    match = (
+        db.query(PotentialMatch)
+        .filter(PotentialMatch.id == record.potential_match_id)
+        .first()
+    )
+    if match and match.status == PotentialMatchStatus.VERIFIED:
+        match.status = PotentialMatchStatus.EXPIRED
+
 
 def _build_status(
     db: Session,
@@ -578,6 +586,11 @@ def process_return_reminders(db: Session) -> int:
         age_days = (now - handed).days
         if age_days >= ADMIN_REVIEW_DAYS and not record.admin_review_flagged:
             record.admin_review_flagged = True
+            from app.services import admin_notification_service
+
+            admin_notification_service.notify_admins_manual_dispute(
+                db, return_id=record.id
+            )
             updated += 1
         elif age_days >= OWNER_REMINDER_DAYS and not record.owner_reminder_sent_at:
             notification_service.notify_return_receipt_reminder(

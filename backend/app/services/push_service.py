@@ -45,7 +45,7 @@ def save_subscription(db: Session, user_id: UUID, endpoint: str, p256dh: str, au
         .values(user_id=user_id, endpoint=endpoint, p256dh=p256dh, auth=auth)
         .on_conflict_do_update(
             constraint="uq_push_user_endpoint",
-            set_={"p256dh": p256dh, "auth": auth},
+            set_={"p256dh": p256dh, "auth": auth, "is_active": True},
         )
         .returning(PushSubscription)
     )
@@ -86,7 +86,12 @@ def send_push_to_user(db: Session, user_id: UUID, title: str, body: str, url: st
         return
 
     subscriptions = (
-        db.query(PushSubscription).filter(PushSubscription.user_id == user_id).all()
+        db.query(PushSubscription)
+        .filter(
+            PushSubscription.user_id == user_id,
+            PushSubscription.is_active.is_(True),
+        )
+        .all()
     )
     if not subscriptions:
         print(f"[Push] SKIP user {user_id} — no browser subscriptions saved", flush=True)

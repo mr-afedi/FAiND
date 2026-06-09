@@ -13,6 +13,8 @@ import {
   createLostItem,
   checkLostHiddenAnswers,
   uploadImageToCloudinary,
+  findRecentLostItemMatch,
+  isAmbiguousSubmitError,
 } from '../services/itemService'
 import { invalidateAfterItemCreate } from '../utils/queryCache'
 import { useCampusZones, createInitialQuestions, newQuestion } from '../hooks/useCampusZones'
@@ -153,23 +155,54 @@ export default function ReportLostPage() {
     })
   }
 
-  const { mutate: submit, isPending } = useMutation({
+  const SUBMIT_COOLDOWN_MS = 10_000
+
+  const submitMutation = useMutation({
     mutationFn: createLostItem,
-    onSuccess: (data) => {
-      invalidateAfterItemCreate(queryClient, { type: 'lost' })
-      if (data.warnings?.length) {
-        data.warnings.forEach((w) => toast(w, { icon: '⚠️', duration: 6000 }))
-      }
-      toast.success('Lost item reported successfully!')
-      navigate('/dashboard')
-    },
-    onError: (err) => {
-      toast.error(err.response?.data?.detail || 'Failed to submit report. Please try again.')
-    },
-    onSettled: () => {
-      release()
-    },
   })
+
+  function scheduleSubmitCooldown() {
+    setTimeout(release, SUBMIT_COOLDOWN_MS)
+  }
+
+  function formatApiError(err) {
+    const detail = err?.response?.data?.detail
+    if (typeof detail === 'string') return detail
+    if (Array.isArray(detail)) {
+      return detail.map((d) => d.msg || d.message || JSON.stringify(d)).join(', ')
+    }
+    if (err?.code === 'ECONNABORTED') {
+      return 'The request timed out. Checking whether your item was saved…'
+    }
+    if (!err?.response) {
+      return 'Network error. Checking whether your item was saved…'
+    }
+    return 'Failed to submit report. Please try again.'
+  }
+
+  function handleLostItemSuccess(data) {
+    invalidateAfterItemCreate(queryClient, { type: 'lost' })
+    const warnings = Array.isArray(data?.warnings) ? data.warnings : []
+    warnings.forEach((w) => toast(w, { icon: '⚠️', duration: 6000 }))
+    if (data?.already_submitted) {
+      toast.success(data.message || 'Your item was already submitted successfully')
+    } else {
+      toast.success('Lost item reported successfully!')
+    }
+    navigate('/dashboard')
+  }
+
+  async function tryRecoverExistingLostItem(payload, locationLabel) {
+    try {
+      return await findRecentLostItemMatch({
+        category: payload.category,
+        location_label: locationLabel,
+        public_description: payload.public_description,
+      })
+    } catch {
+      return null
+    }
+  }
 
   async function handleImageSelect(file, idx) {
     const ALLOWED = ['image/jpeg', 'image/png', 'image/webp']
@@ -247,7 +280,11 @@ export default function ReportLostPage() {
       ? `${dateLost}T${timeLost}:00`
       : `${dateLost}T00:00:00`
 
-    submit({
+    const locationLabel = locationId
+      ? (zones.find((z) => z.id === locationId)?.name || 'Unknown Location')
+      : 'Unknown Location'
+
+    const payload = {
       category,
       public_description: publicDesc.trim(),
       location_id: locationId || null,
@@ -257,7 +294,35 @@ export default function ReportLostPage() {
         question: q.question.trim(),
         answer: q.answer.trim(),
       })),
-    })
+    }
+
+    try {
+      const existing = await tryRecoverExistingLostItem(payload, locationLabel)
+      if (existing) {
+        handleLostItemSuccess({
+          already_submitted: true,
+          message: 'Your item was already submitted successfully',
+        })
+        return
+      }
+
+      const data = await submitMutation.mutateAsync(payload)
+      handleLostItemSuccess(data)
+    } catch (err) {
+      if (isAmbiguousSubmitError(err)) {
+        const recovered = await tryRecoverExistingLostItem(payload, locationLabel)
+        if (recovered) {
+          handleLostItemSuccess({
+            already_submitted: true,
+            message: 'Your item was already submitted successfully',
+          })
+          return
+        }
+      }
+      toast.error(formatApiError(err))
+    } finally {
+      scheduleSubmitCooldown()
+    }
   }
 
   return (
@@ -377,12 +442,12 @@ export default function ReportLostPage() {
               type="button"
               onClick={() => navigate(-1)}
               className="btn-secondary"
-              disabled={isSubmitting || isPending}
+              disabled={isSubmitting || submitMutation.isPending}
             >
               Cancel
             </button>
             <SubmitButton
-              loading={isSubmitting || isPending}
+              loading={isSubmitting || submitMutation.isPending}
               disabled={uploadingIdx !== null}
               className="btn-primary min-w-[140px]"
               loadingLabel="Submitting…"

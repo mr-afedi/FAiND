@@ -9,7 +9,12 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import NavBar from '../components/NavBar'
-import { getPathAForm, submitPathA } from '../services/verificationService'
+import {
+  getPathAForm,
+  getPathAStatus,
+  submitPathA,
+  isAmbiguousVerificationError,
+} from '../services/verificationService'
 import SubmitButton from '../components/SubmitButton'
 import { useSubmitLock } from '../hooks/useSubmitLock'
 import { invalidateAfterVerification } from '../utils/queryCache'
@@ -81,11 +86,95 @@ export default function VerifyOwnershipPage() {
   const [resultState, setResultState] = useState(null)
   const { isSubmitting, tryAcquire, release } = useSubmitLock()
 
-  const { data: form, isLoading, isError, error, refetch } = useQuery({
+  const statusQuery = useQuery({
+    queryKey: ['path-a-status', matchId],
+    queryFn: () => getPathAStatus(matchId),
+    retry: false,
+  })
+
+  const alreadyComplete = statusQuery.data && (
+    statusQuery.data.conversation_id
+    || statusQuery.data.latest_result === 'approved'
+    || statusQuery.data.match_status === 'verified'
+  )
+
+  const underReview = statusQuery.data && (
+    statusQuery.data.match_status === 'pending_review'
+    || statusQuery.data.latest_result === 'review'
+  )
+
+  const { data: form, isLoading: formLoading, isError, error, refetch } = useQuery({
     queryKey: ['path-a-form', matchId],
     queryFn: () => getPathAForm(matchId),
     retry: false,
+    enabled: statusQuery.isSuccess && !alreadyComplete && !underReview && statusQuery.data?.can_verify,
   })
+
+  const isLoading = statusQuery.isLoading
+    || (statusQuery.isSuccess && !alreadyComplete && !underReview && formLoading)
+
+  function applyVerificationResult(data) {
+    invalidateAfterVerification(queryClient, {
+      matchId,
+      lostItemId: form?.lost_item_id,
+      foundItemId: form?.found_item_id,
+    })
+    queryClient.invalidateQueries({ queryKey: ['path-a-status', matchId] })
+    setResultState(data)
+    if (data.result === 'approved') {
+      toast.success('Verification passed!')
+    } else if (data.result === 'review') {
+      toast('Sent for admin review', { icon: <Clock className="w-5 h-5" /> })
+    } else {
+      toast.error('Verification failed')
+    }
+  }
+
+  function formatVerificationError(err) {
+    const detail = err?.response?.data?.detail
+    if (typeof detail === 'string') return detail
+    if (Array.isArray(detail)) {
+      return detail.map((d) => d.msg || d.message || JSON.stringify(d)).join(', ')
+    }
+    return 'Verification submission failed'
+  }
+
+  async function recoverVerificationFromStatus() {
+    try {
+      const status = await getPathAStatus(matchId)
+      if (status.latest_result === 'approved' || status.conversation_id) {
+        applyVerificationResult({
+          result: 'approved',
+          message: 'Verification passed! Chat is now unlocked.',
+          conversation_id: status.conversation_id,
+          attempts_remaining_24h: status.attempts_remaining_24h,
+        })
+        return true
+      }
+      if (status.latest_result === 'review') {
+        applyVerificationResult({
+          result: 'review',
+          message:
+            "Your answers need admin review. We'll notify you when a decision is made.",
+          conversation_id: null,
+          attempts_remaining_24h: status.attempts_remaining_24h,
+        })
+        return true
+      }
+      if (status.latest_result === 'rejected') {
+        applyVerificationResult({
+          result: 'rejected',
+          message: 'Verification failed. You can try again if attempts remain.',
+          conversation_id: null,
+          attempts_remaining_24h: status.attempts_remaining_24h,
+        })
+        return true
+      }
+    } catch {
+      /* ignore */
+    }
+    return false
+  }
 
   const submitMutation = useMutation({
     mutationFn: () =>
@@ -96,23 +185,13 @@ export default function VerifyOwnershipPage() {
           answer: answers[q.id]?.trim() || '',
         })),
       ),
-    onSuccess: (data) => {
-      invalidateAfterVerification(queryClient, {
-        matchId,
-        lostItemId: form?.lost_item_id,
-        foundItemId: form?.found_item_id,
-      })
-      setResultState(data)
-      if (data.result === 'approved') {
-        toast.success('Verification passed!')
-      } else if (data.result === 'review') {
-        toast('Sent for admin review', { icon: <Clock className="w-5 h-5" /> })
-      } else {
-        toast.error('Verification failed')
+    onSuccess: applyVerificationResult,
+    onError: async (err) => {
+      if (isAmbiguousVerificationError(err)) {
+        const recovered = await recoverVerificationFromStatus()
+        if (recovered) return
       }
-    },
-    onError: (err) => {
-      toast.error(err.response?.data?.detail || 'Verification submission failed')
+      toast.error(formatVerificationError(err))
     },
     onSettled: () => {
       release()
@@ -145,19 +224,66 @@ export default function VerifyOwnershipPage() {
     )
   }
 
+  if (statusQuery.isSuccess && alreadyComplete && !resultState) {
+    const st = statusQuery.data
+    return (
+      <>
+        <NavBar />
+        <div className="page-container py-10 max-w-lg mx-auto">
+          <ResultPanel
+            result="approved"
+            message="Verification already passed. Chat is unlocked."
+            conversationId={st.conversation_id}
+            attemptsRemaining={st.attempts_remaining_24h}
+            onRetry={() => {}}
+          />
+        </div>
+      </>
+    )
+  }
+
+  if (statusQuery.isSuccess && underReview && !resultState) {
+    const st = statusQuery.data
+    return (
+      <>
+        <NavBar />
+        <div className="page-container py-10 max-w-lg mx-auto">
+          <ResultPanel
+            result="review"
+            message="Your verification is under admin review. We'll notify you when decided."
+            conversationId={null}
+            attemptsRemaining={st.attempts_remaining_24h}
+            onRetry={() => {}}
+          />
+        </div>
+      </>
+    )
+  }
+
   if (isError) {
+    const detail = error?.response?.data?.detail || ''
+    const alreadyApproved = typeof detail === 'string' && detail.toLowerCase().includes('already')
     return (
       <>
         <NavBar />
         <div className="page-container py-16 max-w-lg mx-auto text-center">
           <Lock className="w-14 h-14 mx-auto mb-4 text-slate-400" aria-hidden />
-          <h1 className="text-xl font-semibold mb-2">Cannot open verification</h1>
+          <h1 className="text-xl font-semibold mb-2">
+            {alreadyApproved ? 'Verification complete' : 'Cannot open verification'}
+          </h1>
           <p className="text-sm text-slate-500 mb-6">
-            {error.response?.data?.detail || 'This match is not available for verification.'}
+            {detail || 'This match is not available for verification.'}
           </p>
-          <Link to="/dashboard?tab=pending" className="btn-primary text-sm">
-            Back to Dashboard
-          </Link>
+          <div className="flex flex-col gap-2 items-center">
+            {statusQuery.data?.conversation_id && (
+              <Link to={`/messages/${statusQuery.data.conversation_id}`} className="btn-primary text-sm">
+                Open Chat
+              </Link>
+            )}
+            <Link to="/dashboard?tab=pending" className="btn-secondary text-sm">
+              Back to Dashboard
+            </Link>
+          </div>
         </div>
       </>
     )

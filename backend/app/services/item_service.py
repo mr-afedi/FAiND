@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from sqlalchemy import and_, exists, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.item import Item, ItemHiddenQuestion, ItemStatus, ItemType
@@ -73,6 +74,9 @@ def _build_owner_response(
     db: Session,
     override_status: Optional[ItemStatus] = None,
     warnings: Optional[list[str]] = None,
+    *,
+    already_submitted: bool = False,
+    message: Optional[str] = None,
 ) -> LostItemOwnerResponse:
     poster = ItemPosterSummary(
         id=item.posted_by.id,
@@ -96,6 +100,8 @@ def _build_owner_response(
         created_at=item.created_at,
         posted_by=poster,
         warnings=warnings or [],
+        already_submitted=already_submitted,
+        message=message,
     )
 
 
@@ -164,6 +170,34 @@ _DUPLICATE_ITEM_MESSAGE = (
     "You have already submitted this item. Please wait before trying again."
 )
 _DUPLICATE_SUBMIT_WINDOW_SECONDS = 30
+_LOST_IDEMPOTENCY_WINDOW_SECONDS = 60
+_LOST_IDEMPOTENCY_MESSAGE = "Your item was already submitted successfully"
+
+
+def _find_recent_lost_item_idempotent(
+    db: Session,
+    *,
+    user_id: uuid.UUID,
+    category,
+    zone_id: Optional[uuid.UUID],
+    window_seconds: int = _LOST_IDEMPOTENCY_WINDOW_SECONDS,
+) -> Optional[Item]:
+    """Same user + category + location within window → return existing lost item."""
+    since = datetime.now(timezone.utc) - timedelta(seconds=window_seconds)
+    q = (
+        db.query(Item)
+        .filter(
+            Item.posted_by_id == user_id,
+            Item.item_type == ItemType.LOST,
+            Item.category == category,
+            Item.created_at >= since,
+        )
+    )
+    if zone_id is None:
+        q = q.filter(Item.location_id.is_(None))
+    else:
+        q = q.filter(Item.location_id == zone_id)
+    return q.order_by(Item.created_at.desc()).first()
 
 
 def _assert_not_duplicate_item_post(
@@ -216,14 +250,25 @@ def create_lost_item(
 
     label, lat, lng, zone_id = _resolve_location(db, payload.location_id, current_user.university_id)
 
-    _assert_not_duplicate_item_post(
+    existing = _find_recent_lost_item_idempotent(
         db,
         user_id=current_user.id,
-        item_type=ItemType.LOST,
         category=payload.category,
-        public_description=payload.public_description,
         zone_id=zone_id,
     )
+    if existing:
+        item = (
+            db.query(Item)
+            .options(joinedload(Item.posted_by))
+            .filter(Item.id == existing.id)
+            .one()
+        )
+        return _build_owner_response(
+            item,
+            db,
+            already_submitted=True,
+            message=_LOST_IDEMPOTENCY_MESSAGE,
+        )
 
     expiry = datetime.now(timezone.utc) + timedelta(days=_LOST_ITEM_ACTIVE_DAYS)
 
@@ -738,7 +783,7 @@ def extend_found_item(
 
 # ── Public Browse (Feature F) ─────────────────────────────────────────────────
 
-# Statuses visible on the public feed (excludes archived/closed/expired)
+# Statuses visible on the public feed (excludes returned/archived/closed/expired)
 _VISIBLE_STATUSES = [
     ItemStatus.OPEN,
     ItemStatus.FOUND,
@@ -746,6 +791,35 @@ _VISIBLE_STATUSES = [
     ItemStatus.UNDER_VERIFICATION,
     ItemStatus.UNDER_DISPUTE,
 ]
+
+_TERMINAL_PUBLIC_STATUSES = (
+    ItemStatus.RETURNED,
+    ItemStatus.ARCHIVED,
+    ItemStatus.CLOSED,
+    ItemStatus.EXPIRED,
+)
+
+
+def _public_feed_filters():
+    """Shared filters for homepage and browse — hide returned and terminal items."""
+    completed_return = exists().where(
+        and_(
+            ItemReturn.returned_at.isnot(None),
+            or_(
+                ItemReturn.lost_item_id == Item.id,
+                ItemReturn.found_item_id == Item.id,
+            ),
+        )
+    )
+    return (
+        Item.status.in_(_VISIBLE_STATUSES),
+        Item.status.notin_(_TERMINAL_PUBLIC_STATUSES),
+        ~completed_return,
+        Item.path_b_bridge == False,
+        Item.path_c_bridge == False,
+        Item.hidden_by_suspension == False,
+        User.status == AccountStatus.ACTIVE,
+    )
 
 
 def _build_browse_card(
@@ -763,7 +837,10 @@ def _build_browse_card(
     # Show POTENTIAL_MATCH to the two parties involved in a match, on BOTH items
     # (lost item and found item). The found item's DB status stays "found" but
     # parties should still see the badge. Non-parties never see POTENTIAL_MATCH.
-    is_party = bool(viewer_matched_ids and item.id in viewer_matched_ids)
+    is_party = (
+        bool(viewer_matched_ids and item.id in viewer_matched_ids)
+        and item.status not in _TERMINAL_PUBLIC_STATUSES
+    )
     if is_party:
         public_status = ItemStatus.POTENTIAL_MATCH
     elif item.status in (
@@ -820,12 +897,7 @@ def browse_items(
         db.query(Item)
         .join(Item.posted_by)
         .options(joinedload(Item.posted_by))
-        .filter(
-            Item.status.in_(_VISIBLE_STATUSES),
-            Item.path_b_bridge == False,
-            Item.path_c_bridge == False,
-            User.status == AccountStatus.ACTIVE,
-        )
+        .filter(*_public_feed_filters())
     )
 
     if item_type:
@@ -894,10 +966,7 @@ def get_homepage_data(
             .options(joinedload(Item.posted_by))
             .filter(
                 Item.item_type == type_filter,
-                Item.status.in_(_VISIBLE_STATUSES),
-                Item.path_b_bridge == False,
-                Item.path_c_bridge == False,
-                User.status == AccountStatus.ACTIVE,
+                *_public_feed_filters(),
             )
             .order_by(Item.created_at.desc())
             .limit(5)

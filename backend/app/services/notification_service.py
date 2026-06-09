@@ -5,8 +5,10 @@ Delivery layers implemented here:
   1. In-app (notifications table)
   3. Web Push (via push_service)
 """
-import uuid
 import logging
+import threading
+import uuid
+
 from sqlalchemy.orm import Session
 
 from app.models.notification import Notification, NotificationType
@@ -15,12 +17,26 @@ logger = logging.getLogger(__name__)
 
 
 def _fire_push(db: Session, user_id: uuid.UUID, title: str, body: str, url: str) -> None:
-    """Best-effort Web Push — never raises so it cannot break the main flow."""
+    """Best-effort Web Push — deferred so slow network I/O cannot block API responses."""
     try:
         from app.services.push_service import send_push_to_user
-        send_push_to_user(db, user_id=user_id, title=title, body=body, url=url)
+
+        uid = user_id
+
+        def _deliver() -> None:
+            from app.core.database import SessionLocal
+
+            session = SessionLocal()
+            try:
+                send_push_to_user(session, user_id=uid, title=title, body=body, url=url)
+            except Exception as exc:
+                logger.warning("Web Push delivery failed for user %s: %s", uid, exc)
+            finally:
+                session.close()
+
+        threading.Thread(target=_deliver, daemon=True).start()
     except Exception as exc:
-        logger.warning("Web Push delivery failed for user %s: %s", user_id, exc)
+        logger.warning("Web Push dispatch failed for user %s: %s", user_id, exc)
 
 
 def create_notification(
@@ -330,6 +346,32 @@ def notify_path_c_rejected(
     _fire_push(db, finder_id, "FAiND", finder_body, finder_link)
 
 
+def notify_post_expiring(
+    db: Session,
+    owner_id: uuid.UUID,
+    item_id: uuid.UUID,
+    days_left: int,
+) -> None:
+    """Section 21.1 / 21.2 — post expires within 3 days."""
+    day_word = "day" if days_left == 1 else "days"
+    body = (
+        f"Your post expires in {days_left} {day_word}. "
+        "Extend it from your dashboard if you still need it."
+    )
+    link = f"/items/{item_id}"
+    create_notification(
+        db,
+        owner_id,
+        NotificationType.POST_EXPIRING,
+        title="Post expiring soon",
+        body=body,
+        link=link,
+        reference_id=item_id,
+    )
+    db.flush()
+    _fire_push(db, owner_id, "FAiND", body, link)
+
+
 def notify_potential_match_expired(
     db: Session,
     owner_id: uuid.UUID,
@@ -551,39 +593,14 @@ def notify_admins_report_escalated(
     db: Session,
     *,
     report_type: str,
-    target_id: uuid.UUID,
+    report_id: uuid.UUID,
 ) -> None:
     """Section 13 — auto-escalation at 3+ distinct reporters."""
-    from app.models.user import User, UserRole, AccountStatus
+    from app.services import admin_notification_service
 
-    admins = (
-        db.query(User)
-        .filter(
-            User.role.in_((UserRole.ROOT_ADMIN, UserRole.ASSISTANT_ROOT_ADMIN)),
-            User.status == AccountStatus.ACTIVE,
-        )
-        .all()
+    admin_notification_service.notify_admins_report_escalated(
+        db, report_type=report_type, report_id=report_id
     )
-    label = "post" if report_type == "post" else "user"
-    body = (
-        f"A {label} report was auto-escalated after {_ESCALATION_LABEL} "
-        "distinct reports. Priority review required."
-    )
-    link = f"/admin/reports?type={label}&target={target_id}"
-    for admin in admins:
-        create_notification(
-            db,
-            admin.id,
-            NotificationType.GENERAL,
-            title="Priority report — review needed",
-            body=body,
-            link=link,
-            reference_id=target_id,
-        )
-    db.flush()
-
-
-_ESCALATION_LABEL = "three or more"
 
 
 def notify_user_warned(db: Session, user_id: uuid.UUID) -> None:
@@ -606,7 +623,11 @@ def notify_user_warned(db: Session, user_id: uuid.UUID) -> None:
 
 
 def notify_account_suspended(db: Session, user_id: uuid.UUID) -> None:
-    body = "Your account has been suspended following a moderation review. Contact support if you believe this is an error."
+    """Section 4.7 — suspended user notification."""
+    body = (
+        "Your account has been suspended pending review. "
+        "Contact support if you believe this is an error."
+    )
     create_notification(
         db,
         user_id,
@@ -618,6 +639,43 @@ def notify_account_suspended(db: Session, user_id: uuid.UUID) -> None:
     )
     db.flush()
     _fire_push(db, user_id, "FAiND", body, "/settings")
+
+
+def notify_account_unsuspended(db: Session, user_id: uuid.UUID) -> None:
+    """Section 4.7 — suspension lifted."""
+    body = "Your account suspension has been lifted."
+    create_notification(
+        db,
+        user_id,
+        NotificationType.ACCOUNT_UNSUSPENDED,
+        title="Account restored",
+        body=body,
+        link="/dashboard",
+        reference_id=None,
+    )
+    db.flush()
+    _fire_push(db, user_id, "FAiND", body, "/dashboard")
+
+
+def notify_conversation_paused_suspension(
+    db: Session,
+    recipient_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+) -> None:
+    """Section 4.7 / 11.4 — other party notified when chat is paused."""
+    body = "This conversation has been paused pending a platform review."
+    link = f"/messages/{conversation_id}"
+    create_notification(
+        db,
+        recipient_id,
+        NotificationType.GENERAL,
+        title="Conversation paused",
+        body=body,
+        link=link,
+        reference_id=conversation_id,
+    )
+    db.flush()
+    _fire_push(db, recipient_id, "FAiND", body, link)
 
 
 def notify_fraud_alert(

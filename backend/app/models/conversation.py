@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
 
-from sqlalchemy import String, DateTime, ForeignKey, Enum, UniqueConstraint
+from sqlalchemy import String, DateTime, ForeignKey, Enum, UniqueConstraint, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -63,6 +63,7 @@ class Conversation(Base):
     unlocked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    frozen_for_suspension: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

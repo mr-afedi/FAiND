@@ -43,6 +43,7 @@ import {
   Plus,
   Sparkles,
   PackageSearch,
+  WifiOff,
 } from 'lucide-react'
 
 const defaultIconClass = 'w-4 h-4 shrink-0'
@@ -175,4 +176,5 @@ export {
   Plus,
   Sparkles,
   PackageSearch,
+  WifiOff,
 }

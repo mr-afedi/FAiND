@@ -11,6 +11,14 @@ export async function getPathAStatus(matchId) {
 }
 
 export async function submitPathA(matchId, answers) {
-  const res = await api.post(`/verification/path-a/${matchId}`, { answers })
+  const res = await api.post(`/verification/path-a/${matchId}`, { answers }, {
+    timeout: 60_000,
+  })
   return res.data
+}
+
+export function isAmbiguousVerificationError(err) {
+  if (!err) return false
+  if (err.code === 'ECONNABORTED') return true
+  return !err.response
 }

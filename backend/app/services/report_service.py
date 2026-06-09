@@ -214,8 +214,9 @@ def _maybe_escalate_post_reports(db: Session, item_id: uuid.UUID) -> None:
     for row in pending:
         row.auto_escalated = True
     db.flush()
+    newest = max(pending, key=lambda r: r.created_at)
     notification_service.notify_admins_report_escalated(
-        db, report_type="post", target_id=item_id
+        db, report_type="post", report_id=newest.id
     )
 
 
@@ -236,8 +237,42 @@ def _maybe_escalate_user_reports(db: Session, reported_user_id: uuid.UUID) -> No
     for row in pending:
         row.auto_escalated = True
     db.flush()
+    newest = max(pending, key=lambda r: r.created_at)
     notification_service.notify_admins_report_escalated(
-        db, report_type="user", target_id=reported_user_id
+        db, report_type="user", report_id=newest.id
+    )
+    from app.services import admin_notification_service
+
+    admin_notification_service.notify_admins_user_reported_multiple(
+        db, user_id=reported_user_id
+    )
+
+
+def _log_report_action(
+    db: Session,
+    admin: User,
+    *,
+    action_type: str,
+    report_type: str,
+    report_id: uuid.UUID,
+    detail: dict,
+) -> None:
+    from app.models.admin_log import AdminActionType
+    from app.services import admin_dashboard_service
+
+    action_map = {
+        "dismiss": AdminActionType.DISMISS_REPORT,
+        "remove_post": AdminActionType.REMOVE_POST,
+        "warn_user": AdminActionType.WARN_USER,
+        "suspend_user": AdminActionType.SUSPEND_USER,
+    }
+    admin_dashboard_service.log_action(
+        db,
+        admin=admin,
+        action=action_map.get(action_type, AdminActionType.DISMISS_REPORT),
+        target_type=f"{report_type}_report",
+        target_id=report_id,
+        detail=detail,
     )
 
 
@@ -248,6 +283,7 @@ def _resolve_post_report(
     action: AdminReportAction,
 ) -> None:
     now = _now()
+    status_before = report.status.value
     report.status = (
         ReportStatus.DISMISSED
         if action == AdminReportAction.DISMISS
@@ -256,6 +292,19 @@ def _resolve_post_report(
     report.admin_action = action
     report.resolved_by_id = admin.id
     report.resolved_at = now
+    _log_report_action(
+        db,
+        admin,
+        action_type=action.value,
+        report_type="post",
+        report_id=report.id,
+        detail={
+            "action": action.value,
+            "item_id": str(report.item_id),
+            "status_before": status_before,
+            "status_after": report.status.value,
+        },
+    )
     notification_service.notify_report_reviewed(db, report.reporter_id, report.id)
 
 
@@ -266,6 +315,7 @@ def _resolve_user_report(
     action: AdminReportAction,
 ) -> None:
     now = _now()
+    status_before = report.status.value
     report.status = (
         ReportStatus.DISMISSED
         if action == AdminReportAction.DISMISS
@@ -274,6 +324,19 @@ def _resolve_user_report(
     report.admin_action = action
     report.resolved_by_id = admin.id
     report.resolved_at = now
+    _log_report_action(
+        db,
+        admin,
+        action_type=action.value,
+        report_type="user",
+        report_id=report.id,
+        detail={
+            "action": action.value,
+            "reported_user_id": str(report.reported_user_id),
+            "status_before": status_before,
+            "status_after": report.status.value,
+        },
+    )
     notification_service.notify_report_reviewed(db, report.reporter_id, report.id)
 
 
@@ -336,13 +399,18 @@ def admin_warn_user(db: Session, report_id: uuid.UUID, admin: User) -> UserRepor
 
 
 def admin_suspend_user(db: Session, report_id: uuid.UUID, admin: User) -> UserReport:
+    from app.services import admin_dashboard_service, suspension_service
+
     report = _get_user_report(db, report_id)
     target = db.query(User).filter(User.id == report.reported_user_id).first()
     if target and target.status == AccountStatus.ACTIVE:
-        target.status = AccountStatus.SUSPENDED
-        target.suspended_at = _now()
-        target.suspended_by_id = admin.id
-        notification_service.notify_account_suspended(db, target.id)
+        suspension_service.suspend_user(
+            db,
+            target,
+            admin,
+            reason=f"User report {report_id}",
+            log_action=admin_dashboard_service.log_action,
+        )
     _resolve_user_report(db, report, admin, AdminReportAction.SUSPEND_USER)
     db.commit()
     db.refresh(report)
@@ -351,10 +419,21 @@ def admin_suspend_user(db: Session, report_id: uuid.UUID, admin: User) -> UserRe
 
 def admin_suppress_reporter(db: Session, user_id: uuid.UUID, admin: User) -> User:
     """Section 13.3 — mark reporter as bad-faith (suppress future report priority)."""
+    from app.models.admin_log import AdminActionType
+    from app.services import admin_dashboard_service
+
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     user.reports_suppressed = True
+    admin_dashboard_service.log_action(
+        db,
+        admin=admin,
+        action=AdminActionType.SUPPRESS_REPORTER,
+        target_type="user",
+        target_id=user.id,
+        detail={"reports_suppressed": True},
+    )
     db.commit()
     db.refresh(user)
     return user
