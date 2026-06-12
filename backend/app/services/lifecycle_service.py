@@ -29,6 +29,13 @@ _EXPIRABLE_STATUSES = (
     ItemStatus.POTENTIAL_MATCH,
 )
 
+_TERMINAL_ITEM_STATUSES = (
+    ItemStatus.RETURNED,
+    ItemStatus.ARCHIVED,
+    ItemStatus.EXPIRED,
+    ItemStatus.CLOSED,
+)
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -127,10 +134,7 @@ def close_expired_dispute_windows(db: Session) -> int:
 
     resolved_returns = (
         db.query(ItemReturn)
-        .filter(
-            ItemReturn.dispute_filed_at.isnot(None),
-            ItemReturn.dispute_resolved_at.isnot(None),
-        )
+        .filter(ItemReturn.dispute_resolved_at.isnot(None))
         .all()
     )
     for record in resolved_returns:
@@ -192,14 +196,9 @@ def resume_paused_matches_on_resolved_disputes(db: Session) -> int:
     """
     resolved_returns = (
         db.query(ItemReturn)
-        .filter(
-            ItemReturn.dispute_filed_at.isnot(None),
-            ItemReturn.dispute_resolved_at.isnot(None),
-        )
+        .filter(ItemReturn.dispute_resolved_at.isnot(None))
         .all()
     )
-    if not resolved_returns:
-        return 0
 
     resumed_item_ids: set[uuid.UUID] = set()
     for record in resolved_returns:
@@ -207,7 +206,9 @@ def resume_paused_matches_on_resolved_disputes(db: Session) -> int:
             if item_id in resumed_item_ids:
                 continue
             item = db.query(Item).filter(Item.id == item_id).first()
-            if item and item.status == ItemStatus.UNDER_DISPUTE:
+            if not item or item.status == ItemStatus.UNDER_DISPUTE:
+                continue
+            if item.status in _TERMINAL_ITEM_STATUSES:
                 continue
             matching_service.resume_matches_for_item(db, item_id)
             resumed_item_ids.add(item_id)
@@ -224,6 +225,13 @@ def resume_paused_matches_on_resolved_disputes(db: Session) -> int:
         if lost and lost.status == ItemStatus.UNDER_DISPUTE:
             continue
         if found and found.status == ItemStatus.UNDER_DISPUTE:
+            continue
+        if (
+            (lost and lost.status in _TERMINAL_ITEM_STATUSES)
+            or (found and found.status in _TERMINAL_ITEM_STATUSES)
+        ):
+            match.status = PotentialMatchStatus.EXPIRED
+            extra += 1
             continue
         match.status = PotentialMatchStatus.ACTIVE
         extra += 1

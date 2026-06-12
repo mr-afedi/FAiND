@@ -19,8 +19,10 @@ from app.models.item_return import ItemReturn
 from app.models.potential_match import PotentialMatch, PotentialMatchStatus
 from app.models.conversation import Conversation, ConversationStatus
 from app.models.user import User, UserRole, AccountStatus
+from app.models.notification import NotificationType
 from app.models.report import PostReport, UserReport, ReportStatus
 from app.models.verification_attempt import VerificationAttempt, VerificationResult
+from app.models.fraud_event import FraudEvent
 from app.models.ihave_this_item_claim import IHaveThisItemClaim
 from app.models.this_might_be_mine_claim import ThisMightBeMineClaim
 from app.services import (
@@ -87,8 +89,91 @@ def get_platform_analytics(db: Session) -> dict:
     )
     fraud_alerts = len(fraud_service.list_fraud_alerts(db, limit=50))
 
-    week_ago = _now() - timedelta(days=7)
-    month_ago = _now() - timedelta(days=30)
+    now = _now()
+    day_ago = now - timedelta(days=1)
+    week_ago = now - timedelta(days=7)
+    month_ago = now - timedelta(days=30)
+
+    lost_this_week = (
+        db.query(func.count(Item.id))
+        .filter(Item.item_type == ItemType.LOST, Item.created_at >= week_ago)
+        .scalar()
+        or 0
+    )
+    found_this_week = (
+        db.query(func.count(Item.id))
+        .filter(Item.item_type == ItemType.FOUND, Item.created_at >= week_ago)
+        .scalar()
+        or 0
+    )
+    returned_this_week = (
+        db.query(func.count(ItemReturn.id))
+        .filter(ItemReturn.returned_at.isnot(None), ItemReturn.returned_at >= week_ago)
+        .scalar()
+        or 0
+    )
+
+    avg_days_post_to_return: float | None = None
+    completed_returns = (
+        db.query(ItemReturn)
+        .filter(ItemReturn.returned_at.isnot(None))
+        .limit(500)
+        .all()
+    )
+    if completed_returns:
+        deltas: list[float] = []
+        for rec in completed_returns:
+            item = db.query(Item).filter(Item.id == rec.lost_item_id).first()
+            if item and item.created_at and rec.returned_at:
+                delta = (rec.returned_at - item.created_at).total_seconds() / 86400
+                if delta >= 0:
+                    deltas.append(delta)
+        if deltas:
+            avg_days_post_to_return = round(sum(deltas) / len(deltas), 1)
+
+    claims_path_a = db.query(func.count(VerificationAttempt.id)).scalar() or 0
+    claims_path_b = db.query(func.count(IHaveThisItemClaim.id)).scalar() or 0
+    claims_path_c = db.query(func.count(ThisMightBeMineClaim.id)).scalar() or 0
+
+    disputes_opened_total = (
+        db.query(func.count(ItemReturn.id))
+        .filter(ItemReturn.dispute_filed_at.isnot(None))
+        .scalar()
+        or 0
+    )
+    disputes_resolved_total = (
+        db.query(func.count(ItemReturn.id))
+        .filter(ItemReturn.dispute_resolved_at.isnot(None))
+        .scalar()
+        or 0
+    )
+
+    active_daily = (
+        db.query(func.count(User.id))
+        .filter(User.last_login_at.isnot(None), User.last_login_at >= day_ago)
+        .scalar()
+        or 0
+    )
+    active_weekly = (
+        db.query(func.count(User.id))
+        .filter(User.last_login_at.isnot(None), User.last_login_at >= week_ago)
+        .scalar()
+        or 0
+    )
+    active_monthly = (
+        db.query(func.count(User.id))
+        .filter(User.last_login_at.isnot(None), User.last_login_at >= month_ago)
+        .scalar()
+        or 0
+    )
+
+    fraud_events_week = (
+        db.query(func.count(FraudEvent.id))
+        .filter(FraudEvent.created_at >= week_ago)
+        .scalar()
+        or 0
+    )
+
     active_7d = (
         db.query(func.count(func.distinct(Item.posted_by_id)))
         .filter(Item.created_at >= week_ago)
@@ -131,6 +216,19 @@ def get_platform_analytics(db: Session) -> dict:
         "active_users_7d": active_7d,
         "active_users_30d": active_30d,
         "trust_distribution": dist,
+        "lost_items_this_week": lost_this_week,
+        "found_items_this_week": found_this_week,
+        "returned_this_week": returned_this_week,
+        "avg_days_post_to_return": avg_days_post_to_return,
+        "claims_path_a": claims_path_a,
+        "claims_path_b": claims_path_b,
+        "claims_path_c": claims_path_c,
+        "disputes_opened_total": disputes_opened_total,
+        "disputes_resolved_total": disputes_resolved_total,
+        "active_users_daily": active_daily,
+        "active_users_weekly": active_weekly,
+        "active_users_monthly": active_monthly,
+        "fraud_events_this_week": fraud_events_week,
     }
 
 
@@ -138,6 +236,10 @@ def list_admin_users(
     db: Session,
     *,
     search: Optional[str] = None,
+    role: Optional[str] = None,
+    status: Optional[str] = None,
+    trust_tier: Optional[str] = None,
+    fraud_tier: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
 ) -> dict:
@@ -151,8 +253,30 @@ def list_admin_users(
                 func.lower(User.full_name).like(term),
             )
         )
-    total = q.count()
-    rows = q.offset(offset).limit(min(limit, 200)).all()
+    if role:
+        try:
+            q = q.filter(User.role == UserRole(role))
+        except ValueError:
+            pass
+    if status:
+        try:
+            q = q.filter(User.status == AccountStatus(status))
+        except ValueError:
+            pass
+    rows_all = q.limit(500).all()
+    if trust_tier or fraud_tier:
+        from app.services.fraud_service import get_risk_tier
+
+        filtered = []
+        for u in rows_all:
+            if trust_tier and get_trust_tier(u.trust_score) != trust_tier:
+                continue
+            if fraud_tier and get_risk_tier(u.fraud_risk_score) != fraud_tier:
+                continue
+            filtered.append(u)
+        rows_all = filtered
+    total = len(rows_all)
+    rows = rows_all[offset : offset + min(limit, 200)]
     return {
         "users": [
             {
@@ -202,7 +326,92 @@ def unsuspend_user(db: Session, user_id: uuid.UUID, admin: User) -> User:
     )
 
 
-def list_claims_queue(db: Session, limit: int = 50) -> list[dict]:
+def _build_claim_queue_row(db: Session, m: PotentialMatch) -> dict:
+    path = "path_a"
+    claimant_id = m.lost_item.posted_by_id if m.lost_item else None
+    claimant_name = ""
+    claimant_trust_tier = ""
+    claim = (
+        db.query(IHaveThisItemClaim)
+        .filter(IHaveThisItemClaim.potential_match_id == m.id)
+        .order_by(IHaveThisItemClaim.created_at.desc())
+        .first()
+    )
+    if claim:
+        path = "path_b"
+        claimant_id = claim.user_id
+        u = db.query(User).filter(User.id == claim.user_id).first()
+        claimant_name = u.full_name if u else ""
+        if u:
+            claimant_trust_tier = get_trust_tier(u.trust_score)
+    else:
+        c_claim = (
+            db.query(ThisMightBeMineClaim)
+            .filter(ThisMightBeMineClaim.potential_match_id == m.id)
+            .order_by(ThisMightBeMineClaim.created_at.desc())
+            .first()
+        )
+        if c_claim:
+            path = "path_c"
+            claimant_id = c_claim.user_id
+            u = db.query(User).filter(User.id == c_claim.user_id).first()
+            claimant_name = u.full_name if u else ""
+            if u:
+                claimant_trust_tier = get_trust_tier(u.trust_score)
+        else:
+            attempt = (
+                db.query(VerificationAttempt)
+                .filter(
+                    VerificationAttempt.potential_match_id == m.id,
+                    VerificationAttempt.result == VerificationResult.REVIEW,
+                )
+                .order_by(VerificationAttempt.created_at.desc())
+                .first()
+            )
+            if attempt:
+                claimant_id = attempt.user_id
+                u = db.query(User).filter(User.id == attempt.user_id).first()
+                claimant_name = u.full_name if u else ""
+                if u:
+                    claimant_trust_tier = get_trust_tier(u.trust_score)
+
+    item_label = ""
+    if m.lost_item:
+        item_label = m.lost_item.public_description[:80]
+
+    return {
+        "match_id": m.id,
+        "path": path,
+        "ownership_score": m.match_score,
+        "match_score": m.match_score,
+        "status": m.status.value,
+        "created_at": m.created_at,
+        "claimant_id": claimant_id,
+        "claimant_name": claimant_name,
+        "claimant_trust_tier": claimant_trust_tier,
+        "lost_item_id": m.lost_item_id,
+        "found_item_id": m.found_item_id,
+        "lost_description": m.lost_item.public_description if m.lost_item else "",
+        "found_description": m.found_item.public_description if m.found_item else "",
+        "item_label": item_label,
+        "university_id": m.university_id,
+        "score_breakdown": m.score_breakdown or {},
+    }
+
+
+def list_claims_queue(
+    db: Session,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+    path: Optional[str] = None,
+    score_min: Optional[float] = None,
+    score_max: Optional[float] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    university_id: Optional[uuid.UUID] = None,
+    sort: str = "created_at_asc",
+) -> dict:
     matches = (
         db.query(PotentialMatch)
         .options(
@@ -210,71 +419,38 @@ def list_claims_queue(db: Session, limit: int = 50) -> list[dict]:
             joinedload(PotentialMatch.found_item),
         )
         .filter(PotentialMatch.status == PotentialMatchStatus.PENDING_REVIEW)
-        .order_by(PotentialMatch.created_at.asc())
-        .limit(min(limit, 100))
         .all()
     )
     items: list[dict] = []
     for m in matches:
-        path = "path_a"
-        claimant_id = m.lost_item.posted_by_id if m.lost_item else None
-        claimant_name = ""
-        claim = (
-            db.query(IHaveThisItemClaim)
-            .filter(IHaveThisItemClaim.potential_match_id == m.id)
-            .order_by(IHaveThisItemClaim.created_at.desc())
-            .first()
-        )
-        if claim:
-            path = "path_b"
-            claimant_id = claim.user_id
-            u = db.query(User).filter(User.id == claim.user_id).first()
-            claimant_name = u.full_name if u else ""
-        else:
-            c_claim = (
-                db.query(ThisMightBeMineClaim)
-                .filter(ThisMightBeMineClaim.potential_match_id == m.id)
-                .order_by(ThisMightBeMineClaim.created_at.desc())
-                .first()
-            )
-            if c_claim:
-                path = "path_c"
-                claimant_id = c_claim.user_id
-                u = db.query(User).filter(User.id == c_claim.user_id).first()
-                claimant_name = u.full_name if u else ""
-            else:
-                attempt = (
-                    db.query(VerificationAttempt)
-                    .filter(
-                        VerificationAttempt.potential_match_id == m.id,
-                        VerificationAttempt.result == VerificationResult.REVIEW,
-                    )
-                    .order_by(VerificationAttempt.created_at.desc())
-                    .first()
-                )
-                if attempt:
-                    claimant_id = attempt.user_id
-                    u = db.query(User).filter(User.id == attempt.user_id).first()
-                    claimant_name = u.full_name if u else ""
+        row = _build_claim_queue_row(db, m)
+        if path and row["path"] != path:
+            continue
+        score = float(row["match_score"] or 0)
+        if score_min is not None and score < score_min:
+            continue
+        if score_max is not None and score > score_max:
+            continue
+        if date_from and row["created_at"] < date_from:
+            continue
+        if date_to and row["created_at"] > date_to:
+            continue
+        if university_id and row["university_id"] != university_id:
+            continue
+        items.append(row)
 
-        items.append(
-            {
-                "match_id": m.id,
-                "path": path,
-                "ownership_score": m.match_score,
-                "match_score": m.match_score,
-                "status": m.status.value,
-                "created_at": m.created_at,
-                "claimant_id": claimant_id,
-                "claimant_name": claimant_name,
-                "lost_item_id": m.lost_item_id,
-                "found_item_id": m.found_item_id,
-                "lost_description": m.lost_item.public_description if m.lost_item else "",
-                "found_description": m.found_item.public_description if m.found_item else "",
-                "score_breakdown": m.score_breakdown or {},
-            }
-        )
-    return items
+    reverse = sort.endswith("_desc")
+    key_name = sort.replace("_asc", "").replace("_desc", "")
+    if key_name == "score":
+        items.sort(key=lambda x: x["match_score"], reverse=reverse)
+    elif key_name == "claimant":
+        items.sort(key=lambda x: (x["claimant_name"] or "").lower(), reverse=reverse)
+    else:
+        items.sort(key=lambda x: x["created_at"], reverse=reverse)
+
+    total = len(items)
+    page = items[offset : offset + min(limit, 100)]
+    return {"claims": page, "total": total}
 
 
 def approve_claim(db: Session, match_id: uuid.UUID, admin: User) -> dict:
@@ -322,6 +498,9 @@ def approve_claim(db: Session, match_id: uuid.UUID, admin: User) -> dict:
         found_item_id=match.found_item_id,
     )
     matching_service.expire_superseded_matches(db, match.lost_item_id, match.id)
+    from app.services import admin_detail_service as _ads
+
+    path, _, _ = _ads._detect_claim_path(db, match)
     log_action(
         db,
         admin=admin,
@@ -331,6 +510,9 @@ def approve_claim(db: Session, match_id: uuid.UUID, admin: User) -> dict:
         detail={
             "status_before": PotentialMatchStatus.PENDING_REVIEW.value,
             "status_after": PotentialMatchStatus.VERIFIED.value,
+            "match_score": float(match.match_score or 0),
+            "score_breakdown": match.score_breakdown or {},
+            "path": path,
         },
     )
     db.commit()
@@ -356,13 +538,32 @@ def request_more_info_claim(
             detail="Please provide at least 10 characters.",
         )
 
+    from app.services import admin_detail_service as _ads
+
+    path, claimant_id, _ = _ads._detect_claim_path(db, match)
+    if claimant_id:
+        notification_service.create_notification(
+            db,
+            claimant_id,
+            NotificationType.GENERAL,
+            title="Admin review — more information needed",
+            body=note[:500],
+            link=f"/items/{match.lost_item_id}" if match.lost_item_id else "/dashboard",
+            reference_id=match.id,
+        )
     log_action(
         db,
         admin=admin,
         action=AdminActionType.REQUEST_MORE_INFO,
         target_type="potential_match",
         target_id=match.id,
-        detail={"note": note, "status_before": match.status.value},
+        detail={
+            "note": note,
+            "status_before": match.status.value,
+            "match_score": float(match.match_score or 0),
+            "score_breakdown": match.score_breakdown or {},
+            "path": path,
+        },
     )
     db.commit()
     return {
@@ -388,6 +589,9 @@ def reject_claim(
     if match.lost_item and match.lost_item.status == ItemStatus.UNDER_VERIFICATION:
         match.lost_item.status = ItemStatus.POTENTIAL_MATCH
 
+    from app.services import admin_detail_service as _ads
+
+    path, _, _ = _ads._detect_claim_path(db, match)
     log_action(
         db,
         admin=admin,
@@ -398,6 +602,9 @@ def reject_claim(
             "note": note or "",
             "status_before": status_before,
             "status_after": match.status.value,
+            "match_score": float(match.match_score or 0),
+            "score_breakdown": match.score_breakdown or {},
+            "path": path,
         },
     )
     db.commit()
@@ -567,6 +774,31 @@ def resolve_dispute(
             item.updated_at = now
         matching_service.resume_matches_for_item(db, item_id)
 
+    flagged_user_id: Optional[uuid.UUID] = None
+    if outcome == "flagged":
+        from app.services import fraud_service
+
+        if record.dispute_filed_by_id == record.lost_owner_id:
+            flagged_user_id = record.found_owner_id
+        elif record.dispute_filed_by_id == record.found_owner_id:
+            flagged_user_id = record.lost_owner_id
+        else:
+            flagged_user_id = record.found_owner_id
+        flagged_user = (
+            db.query(User).filter(User.id == flagged_user_id).first()
+            if flagged_user_id
+            else None
+        )
+        if flagged_user:
+            fraud_service.record_dispute_user_flagged(
+                db,
+                user_id=flagged_user.id,
+                university_id=flagged_user.university_id,
+                return_id=record.id,
+                admin_id=admin.id,
+                note=note.strip(),
+            )
+
     log_action(
         db,
         admin=admin,
@@ -578,6 +810,7 @@ def resolve_dispute(
             "outcome": outcome,
             "note": note[:200],
             "item_status_before": item_status_before,
+            **({"flagged_user_id": str(flagged_user_id)} if flagged_user_id else {}),
         },
     )
     db.commit()
@@ -765,14 +998,32 @@ def list_posts_moderation(
     limit: int = 50,
     offset: int = 0,
     search: Optional[str] = None,
+    status: Optional[str] = None,
+    category: Optional[str] = None,
+    has_reports: Optional[bool] = None,
+    has_disputes: Optional[bool] = None,
 ) -> dict:
     """All active campus posts — flagged/reported items sorted to the top."""
     q = db.query(Item).filter(
-        Item.status.notin_([ItemStatus.ARCHIVED, ItemStatus.EXPIRED])
+        Item.status.notin_([ItemStatus.ARCHIVED, ItemStatus.EXPIRED]),
+        Item.path_b_bridge == False,
+        Item.path_c_bridge == False,
     )
     if search and search.strip():
         term = f"%{search.strip()}%"
         q = q.filter(Item.public_description.ilike(term))
+    if status:
+        try:
+            q = q.filter(Item.status == ItemStatus(status))
+        except ValueError:
+            pass
+    if category:
+        from app.models.item import ItemCategory
+
+        try:
+            q = q.filter(Item.category == ItemCategory(category))
+        except ValueError:
+            pass
 
     rows = q.order_by(Item.updated_at.desc()).limit(500).all()
     posts: list[dict] = []
@@ -786,6 +1037,27 @@ def list_posts_moderation(
             .scalar()
             or 0
         )
+        disputes_count = (
+            db.query(func.count(ItemReturn.id))
+            .filter(
+                or_(
+                    ItemReturn.lost_item_id == item.id,
+                    ItemReturn.found_item_id == item.id,
+                ),
+                ItemReturn.dispute_filed_at.isnot(None),
+                ItemReturn.dispute_resolved_at.is_(None),
+            )
+            .scalar()
+            or 0
+        )
+        if has_reports is True and report_count == 0:
+            continue
+        if has_reports is False and report_count > 0:
+            continue
+        if has_disputes is True and disputes_count == 0:
+            continue
+        if has_disputes is False and disputes_count > 0:
+            continue
         poster = db.query(User).filter(User.id == item.posted_by_id).first()
         flagged = (
             int(report_count or 0) > 0
@@ -803,6 +1075,7 @@ def list_posts_moderation(
                 "posted_by_id": item.posted_by_id,
                 "admin_locked": bool(item.admin_locked),
                 "pending_reports": int(report_count or 0),
+                "disputes_count": int(disputes_count or 0),
                 "flagged": flagged,
                 "created_at": item.created_at,
                 "updated_at": item.updated_at,
@@ -924,6 +1197,404 @@ def demote_assistant_admin(db: Session, user_id: uuid.UUID, root: User) -> User:
     db.commit()
     db.refresh(target)
     return target
+
+
+def list_returned_items(
+    db: Session,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+    category: Optional[str] = None,
+    university_id: Optional[uuid.UUID] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    tipped: Optional[bool] = None,
+    sort: str = "returned_at_desc",
+) -> dict:
+    """Completed returns — historical record for admin Returned Items tab."""
+    from app.models.item import ItemCategory
+
+    rows = (
+        db.query(ItemReturn)
+        .filter(ItemReturn.returned_at.isnot(None))
+        .order_by(ItemReturn.returned_at.desc())
+        .limit(2000)
+        .all()
+    )
+    items: list[dict] = []
+    for record in rows:
+        lost = db.query(Item).filter(Item.id == record.lost_item_id).first()
+        found = db.query(Item).filter(Item.id == record.found_item_id).first()
+        if not lost or not found:
+            continue
+        cat = lost.category.value
+        if category:
+            try:
+                if cat != ItemCategory(category).value:
+                    continue
+            except ValueError:
+                pass
+        if university_id and record.university_id != university_id:
+            continue
+        if date_from and record.returned_at and record.returned_at < date_from:
+            continue
+        if date_to and record.returned_at and record.returned_at > date_to:
+            continue
+        is_tipped = record.appreciation_sent_at is not None
+        if tipped is True and not is_tipped:
+            continue
+        if tipped is False and is_tipped:
+            continue
+        owner = db.query(User).filter(User.id == record.lost_owner_id).first()
+        finder = db.query(User).filter(User.id == record.found_owner_id).first()
+        items.append(
+            {
+                "return_id": record.id,
+                "item_description": lost.public_description[:120],
+                "category": cat,
+                "owner_name": owner.full_name if owner else "",
+                "owner_username": owner.username if owner else "",
+                "finder_name": finder.full_name if finder else "",
+                "finder_username": finder.username if finder else "",
+                "date_lost": lost.date_occurred,
+                "date_found": found.date_occurred,
+                "date_returned": record.returned_at,
+                "tipped": is_tipped,
+                "university_id": record.university_id,
+            }
+        )
+
+    reverse = sort.endswith("_desc")
+    key_name = sort.replace("_asc", "").replace("_desc", "")
+    if key_name == "category":
+        items.sort(key=lambda x: x["category"], reverse=reverse)
+    elif key_name == "owner":
+        items.sort(key=lambda x: (x["owner_name"] or "").lower(), reverse=reverse)
+    elif key_name == "finder":
+        items.sort(key=lambda x: (x["finder_name"] or "").lower(), reverse=reverse)
+    elif key_name == "date_lost":
+        items.sort(key=lambda x: x["date_lost"] or datetime.min.replace(tzinfo=timezone.utc), reverse=reverse)
+    elif key_name == "date_found":
+        items.sort(key=lambda x: x["date_found"] or datetime.min.replace(tzinfo=timezone.utc), reverse=reverse)
+    elif key_name == "tipped":
+        items.sort(key=lambda x: x["tipped"], reverse=reverse)
+    else:
+        items.sort(key=lambda x: x["date_returned"] or datetime.min.replace(tzinfo=timezone.utc), reverse=reverse)
+
+    total = len(items)
+    page = items[offset : offset + min(limit, 100)]
+    return {"items": page, "total": total}
+
+
+def admin_open_return_dispute(
+    db: Session,
+    return_id: uuid.UUID,
+    admin: User,
+    *,
+    reason: str,
+) -> dict:
+    """Admin-initiated manual dispute on a completed return (Section 19)."""
+    record = db.query(ItemReturn).filter(ItemReturn.id == return_id).first()
+    if not record or not record.returned_at:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Return not found.")
+
+    dispute_open = bool(
+        record.dispute_filed_at
+        or (record.admin_review_flagged and not record.dispute_resolved_at)
+    )
+    if dispute_open:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A dispute is already open for this return.",
+        )
+
+    reason = reason.strip()
+    if len(reason) < 10:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reason must be at least 10 characters.",
+        )
+
+    now = _now()
+    record.admin_review_flagged = True
+    record.dispute_reason = reason[:2000]
+    record.dispute_resolved_at = None
+    record.dispute_resolution_note = None
+
+    for item_id in (record.lost_item_id, record.found_item_id):
+        item = db.query(Item).filter(Item.id == item_id).first()
+        if item:
+            item.status = ItemStatus.UNDER_DISPUTE
+            item.updated_at = now
+        matching_service.pause_matches_for_item(db, item_id)
+
+    from app.services import admin_notification_service
+
+    admin_notification_service.notify_admins_manual_dispute(db, return_id=record.id)
+    log_action(
+        db,
+        admin=admin,
+        action=AdminActionType.OPEN_MANUAL_DISPUTE,
+        target_type="item_return",
+        target_id=record.id,
+        detail={"reason": reason[:500]},
+    )
+    db.commit()
+    return {
+        "success": True,
+        "message": "Manual dispute opened. Item status set to under dispute.",
+    }
+
+
+def admin_global_search(db: Session, query: str, *, limit: int = 8) -> dict:
+    q = query.strip()
+    if len(q) < 2:
+        return {"query": q, "users": [], "items": [], "claims": []}
+
+    term = f"%{q.lower()}%"
+    users = (
+        db.query(User)
+        .filter(
+            or_(
+                func.lower(User.email).like(term),
+                func.lower(User.username).like(term),
+                func.lower(User.full_name).like(term),
+            )
+        )
+        .limit(limit)
+        .all()
+    )
+    user_hits = [
+        {
+            "id": u.id,
+            "username": u.username,
+            "email": u.email,
+            "full_name": u.full_name,
+        }
+        for u in users
+    ]
+
+    items_q = db.query(Item).filter(
+        Item.public_description.ilike(f"%{q}%"),
+        Item.path_b_bridge == False,
+        Item.path_c_bridge == False,
+    )
+    try:
+        item_uuid = uuid.UUID(q)
+        items_q = db.query(Item).filter(
+            or_(Item.id == item_uuid, Item.public_description.ilike(f"%{q}%")),
+            Item.path_b_bridge == False,
+            Item.path_c_bridge == False,
+        )
+    except ValueError:
+        pass
+    items = items_q.limit(limit).all()
+    item_hits = [
+        {
+            "id": i.id,
+            "item_type": i.item_type.value,
+            "public_description": i.public_description[:120],
+            "status": i.status.value,
+        }
+        for i in items
+    ]
+
+    claim_hits: list[dict] = []
+    try:
+        match_uuid = uuid.UUID(q)
+        match = (
+            db.query(PotentialMatch)
+            .options(joinedload(PotentialMatch.lost_item))
+            .filter(PotentialMatch.id == match_uuid)
+            .first()
+        )
+        if match:
+            row = _build_claim_queue_row(db, match)
+            claim_hits.append(
+                {
+                    "match_id": row["match_id"],
+                    "path": row["path"],
+                    "claimant_name": row["claimant_name"],
+                    "match_score": row["match_score"],
+                    "status": row["status"],
+                }
+            )
+    except ValueError:
+        pending = (
+            db.query(PotentialMatch)
+            .options(joinedload(PotentialMatch.lost_item))
+            .filter(PotentialMatch.status == PotentialMatchStatus.PENDING_REVIEW)
+            .limit(50)
+            .all()
+        )
+        for m in pending:
+            row = _build_claim_queue_row(db, m)
+            if q.lower() in (row["claimant_name"] or "").lower():
+                claim_hits.append(
+                    {
+                        "match_id": row["match_id"],
+                        "path": row["path"],
+                        "claimant_name": row["claimant_name"],
+                        "match_score": row["match_score"],
+                        "status": row["status"],
+                    }
+                )
+                if len(claim_hits) >= limit:
+                    break
+
+    return {
+        "query": q,
+        "users": user_hits,
+        "items": item_hits,
+        "claims": claim_hits[:limit],
+    }
+
+
+def adjust_user_trust(
+    db: Session,
+    user_id: uuid.UUID,
+    admin: User,
+    *,
+    delta: int,
+    reason: str,
+) -> dict:
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    reason = reason.strip()
+    if len(reason) < 10:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reason must be at least 10 characters.",
+        )
+    before = target.trust_score
+    event = trust_service.admin_adjust_trust(db, user_id, delta, admin.id)
+    if event is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trust score is frozen while the user is suspended.",
+        )
+    trust_after = target.trust_score
+    log_action(
+        db,
+        admin=admin,
+        action=AdminActionType.TRUST_ADJUSTMENT,
+        target_type="user",
+        target_id=user_id,
+        detail={
+            "delta": delta,
+            "reason": reason,
+            "trust_before": before,
+            "trust_after": trust_after,
+        },
+    )
+    db.commit()
+    return {
+        "success": True,
+        "message": f"Trust adjusted by {delta:+d}. New score: {trust_after}.",
+    }
+
+
+def lock_dispute_item(
+    db: Session,
+    dispute_id: uuid.UUID,
+    admin: User,
+    *,
+    dispute_type: Optional[str],
+    reason: str,
+) -> dict:
+    reason = reason.strip()
+    if len(reason) < 10:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reason must be at least 10 characters.",
+        )
+    item_ids: list[uuid.UUID] = []
+    if dispute_type == "verification":
+        match = db.query(PotentialMatch).filter(PotentialMatch.id == dispute_id).first()
+        if not match:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dispute not found.")
+        item_ids = [match.lost_item_id, match.found_item_id]
+    else:
+        record = db.query(ItemReturn).filter(ItemReturn.id == dispute_id).first()
+        if not record:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dispute not found.")
+        item_ids = [record.lost_item_id, record.found_item_id]
+
+    now = _now()
+    locked: list[str] = []
+    for item_id in item_ids:
+        if not item_id:
+            continue
+        item = db.query(Item).filter(Item.id == item_id).first()
+        if item:
+            item.admin_locked = True
+            item.updated_at = now
+            matching_service.pause_matches_for_item(db, item_id)
+            locked.append(str(item_id))
+
+    log_action(
+        db,
+        admin=admin,
+        action=AdminActionType.LOCK_ITEM,
+        target_type="dispute",
+        target_id=dispute_id,
+        detail={"reason": reason, "locked_item_ids": locked},
+    )
+    db.commit()
+    return {"success": True, "message": "Item locked. No further claims until resolved."}
+
+
+def escalate_dispute(
+    db: Session,
+    dispute_id: uuid.UUID,
+    admin: User,
+    *,
+    dispute_type: Optional[str],
+    note: str,
+) -> dict:
+    if admin.role == UserRole.ROOT_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Root admins resolve disputes directly; escalation is for assistants only.",
+        )
+    note = note.strip()
+    if len(note) < 10:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Note must be at least 10 characters.",
+        )
+    from app.services import admin_notification_service
+
+    link = admin_notification_service.admin_link(
+        "disputes",
+        dispute_id,
+    )
+    roots = (
+        db.query(User)
+        .filter(User.role == UserRole.ROOT_ADMIN, User.status == AccountStatus.ACTIVE)
+        .all()
+    )
+    for root in roots:
+        notification_service.create_notification(
+            db,
+            root.id,
+            NotificationType.GENERAL,
+            title="Dispute escalated by assistant admin",
+            body=note[:500],
+            link=link,
+            reference_id=dispute_id,
+        )
+    log_action(
+        db,
+        admin=admin,
+        action=AdminActionType.ESCALATE_DISPUTE,
+        target_type="dispute",
+        target_id=dispute_id,
+        detail={"note": note, "dispute_type": dispute_type or "unknown"},
+    )
+    db.commit()
+    return {"success": True, "message": "Escalated to root admin."}
 
 
 def list_admin_logs(

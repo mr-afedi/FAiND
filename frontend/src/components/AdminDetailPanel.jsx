@@ -2,6 +2,33 @@
  * Admin detail panel — renders full context for queue items.
  */
 import { Link } from 'react-router-dom'
+import {
+  formatScorePct,
+  statusColor,
+  riskTierColor,
+  pathBadge,
+  formatFraudSignal,
+} from '../utils/adminFormat'
+
+function RecentActions({ actions }) {
+  if (!actions?.length) return null
+  return (
+    <div className="mt-3 border-t border-slate-800 pt-3">
+      <p className="text-xs text-slate-400 uppercase mb-2">Recent admin actions</p>
+      <div className="space-y-1.5">
+        {actions.map((a, i) => (
+          <p key={`${a.action}-${i}`} className="text-xs text-slate-500">
+            <span className="text-slate-300 capitalize">{a.action.replace(/_/g, ' ')}</span>
+            {' by '}
+            <span className="text-brand-400">{a.admin_email}</span>
+            {' · '}
+            {new Date(a.created_at).toLocaleString()}
+          </p>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 function Photos({ urls }) {
   if (!urls?.length) return <p className="text-xs text-slate-500">No photos</p>
@@ -23,7 +50,7 @@ function Photos({ urls }) {
 function ItemBlock({ item, label }) {
   if (!item) return null
   return (
-    <div className="glass p-3 mt-2">
+    <div className="admin-detail-block">
       <p className="text-xs text-brand-400 uppercase">{label}</p>
       <p className="text-sm mt-1">{item.public_description}</p>
       <p className="text-xs text-slate-500 mt-1">
@@ -187,7 +214,7 @@ function PostClaimsList({ claims }) {
               }`}>
                 {c.status?.replace(/_/g, ' ')}
               </span>
-              <span className="text-slate-400">score {c.match_score}</span>
+              <span className="text-slate-400">score {formatScorePct(c.match_score)}</span>
             </div>
             {c.claimant ? (
               <>
@@ -276,13 +303,13 @@ function ClaimsSummary({ claims }) {
       <p className="text-xs text-slate-400 uppercase mb-2">Claims made ({total})</p>
       <div className="space-y-1 max-h-32 overflow-y-auto text-xs text-slate-400">
         {pathA.map((c) => (
-          <p key={c.id}>Path A · {c.result} · score {c.ownership_score}</p>
+          <p key={c.id}>Path A · {c.result} · score {formatScorePct(c.ownership_score)}</p>
         ))}
         {pathB.map((c) => (
-          <p key={c.id}>Path B · {c.result} · score {c.ownership_score}</p>
+          <p key={c.id}>Path B · {c.result} · score {formatScorePct(c.ownership_score)}</p>
         ))}
         {pathC.map((c) => (
-          <p key={c.id}>Path C · {c.result} · score {c.ownership_score}</p>
+          <p key={c.id}>Path C · {c.result} · score {formatScorePct(c.ownership_score)}</p>
         ))}
       </div>
     </div>
@@ -293,17 +320,32 @@ export function ClaimDetail({ detail, actions }) {
   if (!detail) return null
   return (
     <div>
-      <p className="text-xs text-brand-400 uppercase">{detail.path}</p>
+      <p className="text-xs text-brand-400 uppercase">Path {pathBadge(detail.path)}</p>
       <p className="text-sm text-slate-400 mt-1">{detail.scoring_formula}</p>
-      <p className="text-sm mt-2">Score: {detail.match_score}</p>
+      <p className="text-sm mt-2">
+        Overall score: <span className="font-semibold text-slate-200">{formatScorePct(detail.match_score)}</span>
+      </p>
+      {detail.gradual_improvement_detected && (
+        <p className="text-xs text-amber-400 mt-1">⚠ Gradual improvement pattern detected across attempts</p>
+      )}
       {detail.claimant && (
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-slate-500 mt-1">
           Claimant: {detail.claimant.full_name} (@{detail.claimant.username})
+          {' · '}
+          Trust {detail.claimant.trust_score} ({detail.claimant.trust_tier})
+          {' · '}
+          Fraud {detail.claimant.fraud_risk_score} ({detail.claimant.fraud_risk_tier})
         </p>
+      )}
+      {detail.attempt_scores?.length > 0 && (
+        <div className="mt-2 text-xs text-slate-500">
+          Attempt scores: {detail.attempt_scores.map((s) => formatScorePct(s)).join(' → ')}
+        </div>
       )}
       <ItemBlock item={detail.lost_item} label="Lost item" />
       <ItemBlock item={detail.found_item} label="Found item" />
       <JsonBlock data={detail.evidence} title="Evidence & scores" />
+      <RecentActions actions={detail.recent_actions} />
       {actions}
     </div>
   )
@@ -321,7 +363,7 @@ function ClaimantsList({ claimants }) {
               {c.claimant?.full_name || 'Unknown'} (@{c.claimant?.username || '?'})
             </p>
             <p className="text-slate-500 mt-0.5">
-              {c.path} · score {c.match_score} · status {c.status}
+              {c.path} · score {formatScorePct(c.match_score)} · status {c.status}
             </p>
             <p className="text-slate-600 mt-0.5">
               Trust {c.claimant?.trust_score} · Fraud {c.claimant?.fraud_risk_score}
@@ -343,7 +385,7 @@ function VerificationHistory({ rows }) {
           <div key={v.id} className="text-xs text-slate-400 border-l-2 border-slate-700 pl-2">
             <span className="text-slate-300">{v.path}</span>
             {' · '}
-            {v.result} · score {v.ownership_score}
+            {v.result} · score {formatScorePct(v.ownership_score)}
             {' · '}
             <span className="text-slate-600">{new Date(v.created_at).toLocaleString()}</span>
           </div>
@@ -388,6 +430,10 @@ export function DisputeDetail({ detail, actions }) {
         </div>
       )}
       <VerificationHistory rows={detail.verification_history} />
+      {detail.reports_on_parties && (
+        <JsonBlock data={detail.reports_on_parties} title="Reports involving parties" />
+      )}
+      <RecentActions actions={detail.recent_actions} />
       {actions}
     </div>
   )
@@ -400,6 +446,11 @@ export function ReportDetail({ detail, actions }) {
     <div>
       <p className="text-xs text-brand-400 uppercase">{detail.report_type} report</p>
       <p className="text-sm mt-1">{r.reason} — {r.detail_text || 'No details'}</p>
+      {r.reporter && (
+        <p className="text-xs text-slate-500 mt-1">
+          Reporter: @{r.reporter.username} · trust {r.reporter.trust_score} ({r.reporter.trust_tier})
+        </p>
+      )}
       {r.auto_escalated && (
         <span className="text-xs text-amber-400">Priority — auto-escalated</span>
       )}
@@ -410,6 +461,7 @@ export function ReportDetail({ detail, actions }) {
         </p>
       )}
       <JsonBlock data={detail.report_history_on_target} title="All reports on target" />
+      <RecentActions actions={detail.recent_actions} />
       {actions}
     </div>
   )
@@ -419,18 +471,135 @@ export function FraudDetail({ detail, actions }) {
   if (!detail) return null
   return (
     <div>
-      <p className="text-sm font-medium">{detail.user?.email}</p>
-      <p className="text-xs text-slate-400">
-        Risk {detail.fraud_risk_score} ({detail.fraud_risk_tier}) · Trust {detail.trust_score}
+      <p className="text-sm font-medium">
+        {detail.user?.full_name}{' '}
+        <span className="text-slate-500">@{detail.user?.username}</span>
       </p>
+      <p className="text-xs text-slate-400 truncate">{detail.user?.email}</p>
+      <p className="text-xs text-slate-400 mt-1">
+        Risk {detail.fraud_risk_score}{' '}
+        <span className={`px-1.5 py-0.5 rounded ${riskTierColor(detail.fraud_risk_tier)}`}>
+          {detail.fraud_risk_tier}
+        </span>
+        {' · '}
+        Trust {detail.trust_score} ({detail.trust_tier})
+      </p>
+      {detail.verification_blocked && (
+        <p className="text-xs text-red-400 mt-2">
+          Verification blocked — score at or above 100. Use &quot;Allow verification&quot; to restore attempts.
+        </p>
+      )}
+      {detail.fraud_verification_override && (
+        <p className="text-xs text-emerald-400 mt-1">
+          Verification override active — user may submit claims despite elevated risk.
+        </p>
+      )}
       <div className="mt-3 max-h-64 overflow-y-auto space-y-1">
         <p className="text-xs text-slate-400 uppercase">Fraud event history</p>
         {(detail.fraud_events || []).map((e) => (
           <p key={e.id} className="text-xs text-slate-500">
-            {new Date(e.created_at).toLocaleString()} — {e.signal_type} ({e.delta >= 0 ? '+' : ''}{e.delta}) → {e.score_after}
+            {new Date(e.created_at).toLocaleString()}
+            {' — '}
+            {formatFraudSignal(e.signal_type)}
+            {' '}
+            ({e.delta >= 0 ? '+' : ''}{e.delta}) → {e.score_after}
           </p>
         ))}
       </div>
+      <ItemList items={detail.items_posted} title="Items posted" limit={8} />
+      <ClaimsSummary claims={detail.claims} />
+      <ReportList reports={detail.reports_received} title="Reports received" />
+      <RecentActions actions={detail.recent_actions} />
+      {actions}
+    </div>
+  )
+}
+
+export function ReturnedDetail({ detail, actions, onGoToDispute }) {
+  if (!detail) return null
+  const lost = detail.lost_item
+  const d = detail.dispute || {}
+  return (
+    <div>
+      <ItemBlock item={lost} label="Lost item (returned)" />
+      {detail.found_item && (
+        <p className="text-xs text-slate-500 mt-2">
+          Found post: {detail.found_item.public_description?.slice(0, 100)}
+        </p>
+      )}
+      <div className="admin-detail-block mt-2 text-xs space-y-1">
+        <p>
+          <span className="text-slate-500">Owner</span>{' '}
+          @{detail.owner?.username} · trust {detail.owner?.trust_score} ({detail.owner?.trust_tier})
+        </p>
+        <p>
+          <span className="text-slate-500">Finder</span>{' '}
+          @{detail.finder?.username} · trust {detail.finder?.trust_score} ({detail.finder?.trust_tier})
+        </p>
+        <p><span className="text-slate-500">Location lost</span> {detail.location_lost || '—'}</p>
+        <p><span className="text-slate-500">Location found</span> {detail.location_found || '—'}</p>
+        <p>
+          <span className="text-slate-500">Dates</span>{' '}
+          lost {detail.date_lost ? new Date(detail.date_lost).toLocaleDateString() : '—'}
+          {' · '}
+          found {detail.date_found ? new Date(detail.date_found).toLocaleDateString() : '—'}
+          {' · '}
+          returned {detail.date_returned ? new Date(detail.date_returned).toLocaleString() : '—'}
+        </p>
+        <p><span className="text-slate-500">Confirmed via</span> {detail.return_method || '—'}</p>
+        <p>
+          <span className="text-slate-500">Verification</span> Path {pathBadge(detail.verification_path)}
+          {detail.approval_score != null && (
+            <> · score {formatScorePct(detail.approval_score)}</>
+          )}
+        </p>
+        <p>
+          <span className="text-slate-500">Tip</span>{' '}
+          {detail.tip?.tipped ? (
+            <span className="text-emerald-400 font-medium">
+              GHS {detail.tip.amount_ghs} ({detail.tip.currency})
+            </span>
+          ) : (
+            <span className="text-slate-400">{detail.tip?.message || 'No tip sent'}</span>
+          )}
+        </p>
+      </div>
+      {d.had_dispute && (
+        <div className="mt-3 text-xs">
+          <p className="text-slate-400 uppercase mb-1">Dispute history</p>
+          {d.filed_at && (
+            <p className="text-slate-500">
+              Filed {new Date(d.filed_at).toLocaleString()}
+              {d.reason ? ` — ${d.reason}` : ''}
+            </p>
+          )}
+          {d.resolved_at && (
+            <p className="text-slate-500">
+              Resolved {new Date(d.resolved_at).toLocaleString()}
+              {d.resolution_note ? ` — ${d.resolution_note}` : ''}
+            </p>
+          )}
+          {d.open && d.dispute_type && onGoToDispute && (
+            <button
+              type="button"
+              className="text-brand-400 hover:underline mt-1"
+              onClick={() => onGoToDispute(d.return_id, d.dispute_type)}
+            >
+              Open in Disputes tab →
+            </button>
+          )}
+        </div>
+      )}
+      {detail.chat_history?.length > 0 && (
+        <div className="mt-3 max-h-48 overflow-y-auto">
+          <p className="text-xs text-slate-400 uppercase mb-1">Chat history (read-only)</p>
+          {detail.chat_history.map((m) => (
+            <p key={m.id} className="text-xs text-slate-400">
+              <span className="text-slate-300">{m.sender_name}:</span> {m.body}
+            </p>
+          ))}
+        </div>
+      )}
       {actions}
     </div>
   )
@@ -456,6 +625,7 @@ export function PostDetail({ detail, actions }) {
       >
         View on main site →
       </Link>
+      <RecentActions actions={detail.recent_actions} />
       {actions}
     </div>
   )
@@ -484,7 +654,7 @@ export function UserDetailPanel({ detail, actions }) {
         <p className="text-xs text-slate-400 uppercase">Fraud history</p>
         {(detail.fraud_events || []).slice(0, 10).map((e) => (
           <p key={e.id} className="text-xs text-slate-500">
-            {e.signal_type} ({e.delta >= 0 ? '+' : ''}{e.delta})
+            {formatFraudSignal(e.signal_type)} ({e.delta >= 0 ? '+' : ''}{e.delta}) → {e.score_after}
           </p>
         ))}
       </div>
@@ -499,6 +669,7 @@ export function UserDetailPanel({ detail, actions }) {
           </p>
         </div>
       )}
+      <RecentActions actions={detail.recent_actions} />
       {actions}
     </div>
   )
@@ -507,14 +678,14 @@ export function UserDetailPanel({ detail, actions }) {
 export default function AdminDetailPanel({ section, detail, loading, children }) {
   if (!detail && !loading) {
     return (
-      <div className="glass p-6 text-sm text-slate-500 h-full flex items-center justify-center">
+      <div className="admin-detail-panel min-h-[12rem] text-sm text-slate-500 flex items-center justify-center">
         Select an item to view full details
       </div>
     )
   }
   return (
-    <div className="glass p-4 overflow-y-auto max-h-[calc(100vh-8rem)]">
-      <h2 className="text-sm font-semibold text-slate-300 mb-3 capitalize">{section} detail</h2>
+    <div className="admin-detail-panel max-h-[calc(100vh-11rem)] min-w-0">
+      <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">{section} detail</h2>
       {loading && !detail ? (
         <p className="text-sm text-slate-500">Loading…</p>
       ) : (

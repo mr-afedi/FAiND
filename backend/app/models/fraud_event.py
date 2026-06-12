@@ -26,6 +26,7 @@ class FraudSignalType(str, PyEnum):
     ADMIN_VERIFICATION_OVERRIDE = "admin_verification_override"
     GRADUAL_IMPROVEMENT = "gradual_improvement"
     RISK_TIER_HIGH = "risk_tier_high"
+    DISPUTE_USER_FLAGGED = "dispute_user_flagged"
 
 
 class FraudEvent(Base):

@@ -125,7 +125,7 @@ export default function AdminNotificationBell({ onNavigate }) {
                   onClick={() => markAllMutation.mutate()}
                   className="text-xs text-brand-400 hover:underline"
                 >
-                  Mark all read
+                  Mark all as read
                 </button>
               )}
             </div>

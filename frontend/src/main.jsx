@@ -7,16 +7,23 @@ import App from './App'
 import './index.css'
 import { ThemeProvider } from './context/ThemeContext'
 
-// Register service worker (Section 29 — Web Push + offline shell)
-registerSW({
-  immediate: true,
-  onOfflineReady() {
-    console.info('[PWA] App shell cached — offline fallback available.')
-  },
-  onNeedRefresh() {
-    console.info('[PWA] New version available — refresh to update.')
-  },
-})
+// Service worker — production only. In dev it caches stale bundles/API failures
+// and causes flaky login / empty homepage until multiple hard refreshes.
+if (import.meta.env.PROD) {
+  registerSW({
+    immediate: true,
+    onOfflineReady() {
+      console.info('[PWA] App shell cached — offline fallback available.')
+    },
+    onNeedRefresh() {
+      console.info('[PWA] New version available — refresh to update.')
+    },
+  })
+} else if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then((regs) => {
+    regs.forEach((r) => r.unregister())
+  })
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {

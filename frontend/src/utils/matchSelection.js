@@ -21,8 +21,13 @@ export function pickPrimaryMatch(matches, predicate) {
   })[0]
 }
 
+function isClaimBridgeMatch(match) {
+  const path = match?.score_breakdown?.path
+  return path === 'path_b' || path === 'path_c'
+}
+
 export function matchNeedsVerification(match) {
-  return match?.status === 'active'
+  return match?.status === 'active' && !isClaimBridgeMatch(match)
 }
 
 export function matchVerificationComplete(match) {

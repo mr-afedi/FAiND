@@ -52,6 +52,7 @@ class OwnProfileResponse(BaseModel):
     push_notifications_enabled: bool
     email_notifications_enabled: bool
     member_since: str
+    tips_received_count: int = 0
 
     model_config = {"from_attributes": True}
 

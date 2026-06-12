@@ -10,9 +10,11 @@ import {
   getMyNotifications,
   markNotificationRead,
   markAllNotificationsRead,
+  deleteNotification,
+  clearDeletableNotifications,
 } from '../services/matchService'
 import { getItemDetail } from '../services/itemService'
-import { NotificationTypeIcon, Bell } from './icons'
+import { NotificationTypeIcon, Bell, Trash2 } from './icons'
 
 const ITEM_LINK_RE = /^\/items\/([0-9a-f-]{36})$/i
 
@@ -29,9 +31,10 @@ function timeAgo(isoString) {
 /** Approximate two lines of text-xs in the notification panel */
 const BODY_TWO_LINE_CHARS = 100
 
-function NotificationRow({ notif, onNavigate }) {
+function NotificationRow({ notif, onNavigate, onDelete, isDeleting }) {
   const [expanded, setExpanded] = useState(false)
   const canExpand = (notif.body?.length ?? 0) > BODY_TWO_LINE_CHARS
+  const isDimmed = !notif.deletable && notif.read
 
   const handleRowClick = () => {
     onNavigate(notif)
@@ -51,7 +54,8 @@ function NotificationRow({ notif, onNavigate }) {
       className={`w-full text-left px-4 py-3 flex gap-3 items-start cursor-pointer
                   hover:bg-slate-50 dark:hover:bg-slate-800/60
                   transition-colors duration-100
-                  ${!notif.read ? 'bg-blue-50/60 dark:bg-blue-900/10' : ''}`}
+                  ${!notif.read ? 'bg-blue-50/60 dark:bg-blue-900/10' : ''}
+                  ${isDimmed ? 'opacity-55' : ''}`}
     >
       <span className="mt-0.5 flex-shrink-0 text-slate-500 dark:text-slate-400">
         <NotificationTypeIcon type={notif.notification_type} />
@@ -88,15 +92,33 @@ function NotificationRow({ notif, onNavigate }) {
           {timeAgo(notif.created_at)}
         </p>
       </div>
-      {!notif.read && (
-        <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0 mt-1.5" />
-      )}
+      <div className="flex flex-col items-center gap-1.5 flex-shrink-0 mt-0.5">
+        {!notif.read && (
+          <span className="w-2 h-2 rounded-full bg-blue-500" />
+        )}
+        {notif.deletable && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete(notif.id)
+            }}
+            disabled={isDeleting}
+            className="p-1 rounded-md text-slate-400 hover:text-red-500
+                       hover:bg-red-50 dark:hover:bg-red-900/20
+                       disabled:opacity-40 transition-colors"
+            aria-label="Delete notification"
+          >
+            <Trash2 className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden />
+          </button>
+        )}
+      </div>
     </div>
   )
 }
 
 export default function NotificationDropdown() {
-  const { isAuthenticated } = useAuth()
+  const { isAuthenticated, authReady } = useAuth()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -113,7 +135,7 @@ export default function NotificationDropdown() {
   const { data } = useQuery({
     queryKey: ['notifications-unread'],
     queryFn: getMyNotifications,
-    enabled: isAuthenticated,
+    enabled: isAuthenticated && authReady,
     staleTime: 30_000,
     refetchInterval: 60_000,
   })
@@ -121,12 +143,13 @@ export default function NotificationDropdown() {
   const { data: listData, isLoading } = useQuery({
     queryKey: ['notifications-list'],
     queryFn: () => getMyNotifications({ limit: 20 }),
-    enabled: isAuthenticated && open,
+    enabled: isAuthenticated && authReady && open,
     staleTime: 15_000,
   })
 
   const unreadCount = data?.unread_count ?? 0
   const notifications = listData?.notifications ?? []
+  const deletableCount = notifications.filter((n) => n.deletable).length
 
   const markReadMutation = useMutation({
     mutationFn: markNotificationRead,
@@ -138,6 +161,22 @@ export default function NotificationDropdown() {
 
   const markAllMutation = useMutation({
     mutationFn: markAllNotificationsRead,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
+      queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
+    },
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteNotification,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
+      queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
+    },
+  })
+
+  const clearAllMutation = useMutation({
+    mutationFn: clearDeletableNotifications,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
       queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
@@ -193,14 +232,28 @@ export default function NotificationDropdown() {
           <div className="flex items-center justify-between px-4 py-3
                           border-b border-slate-100 dark:border-slate-800">
             <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">Notifications</h3>
-            {unreadCount > 0 && (
-              <button
-                onClick={() => markAllMutation.mutate()}
-                className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-              >
-                Mark all read
-              </button>
-            )}
+            <div className="flex items-center gap-3">
+              {deletableCount > 0 && (
+                <button
+                  onClick={() => clearAllMutation.mutate()}
+                  disabled={clearAllMutation.isPending}
+                  className="text-xs text-slate-500 dark:text-slate-400 hover:text-red-600
+                             dark:hover:text-red-400 hover:underline disabled:opacity-50"
+                >
+                  Clear all
+                </button>
+              )}
+              {unreadCount > 0 && (
+                <button
+                  onClick={() => markAllMutation.mutate()}
+                  disabled={markAllMutation.isPending}
+                  className="text-xs text-blue-600 dark:text-blue-400 hover:underline
+                             disabled:opacity-50"
+                >
+                  Mark all as read
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="overflow-y-auto flex-1">
@@ -219,6 +272,8 @@ export default function NotificationDropdown() {
                   key={notif.id}
                   notif={notif}
                   onNavigate={handleNotificationClick}
+                  onDelete={(id) => deleteMutation.mutate(id)}
+                  isDeleting={deleteMutation.isPending}
                 />
               ))
             )}

@@ -486,13 +486,14 @@ def _paystack_post(path: str, payload: dict) -> dict:
 
 
 def _paystack_verify_transaction(reference: str) -> dict:
+    """Return Paystack transaction object (status, amount, paid_at, …)."""
     with httpx.Client(timeout=30.0) as client:
         resp = client.get(
             f"{PAYSTACK_BASE}/transaction/verify/{reference}",
             headers=_paystack_headers(),
         )
-    data = _parse_paystack_response(resp)
-    return data.get("data") or {}
+    # _parse_paystack_response already unwraps the top-level `data` field.
+    return _parse_paystack_response(resp)
 
 
 def _parse_paystack_response(resp: httpx.Response) -> dict[str, Any]:

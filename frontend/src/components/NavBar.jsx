@@ -131,13 +131,13 @@ function AvatarDropdown({ user, onLogout }) {
 }
 
 export default function NavBar() {
-  const { user, isAuthenticated, logout } = useAuth()
+  const { user, isAuthenticated, authReady, logout } = useAuth()
   const navigate = useNavigate()
 
   const { data: messagesUnread = 0 } = useQuery({
     queryKey: ['messages-unread-count'],
     queryFn: getUnreadMessageCount,
-    enabled: isAuthenticated,
+    enabled: isAuthenticated && authReady,
     staleTime: 5000,
   })
 

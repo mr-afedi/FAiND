@@ -4,6 +4,19 @@
  */
 import { markPushPromptReady } from './pushPrompt'
 
+/** After login, logout, or silent refresh bootstrap — refetch viewer-specific data. */
+export function invalidateAfterAuthSession(queryClient) {
+  queryClient.invalidateQueries({ queryKey: ['homepage'] })
+  queryClient.invalidateQueries({ queryKey: ['browse'] })
+  queryClient.invalidateQueries({ queryKey: ['my-matches'] })
+  queryClient.invalidateQueries({ queryKey: ['my-matches-for-item'] })
+  queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
+  queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
+  queryClient.invalidateQueries({ queryKey: ['messages-unread-count'] })
+  queryClient.invalidateQueries({ queryKey: ['conversations'] })
+  queryClient.invalidateQueries({ queryKey: ['me'] })
+}
+
 export function invalidateAfterItemCreate(queryClient, { type = 'lost' } = {}) {
   queryClient.invalidateQueries({ queryKey: [type === 'lost' ? 'my-lost-items' : 'my-found-items'] })
   queryClient.invalidateQueries({ queryKey: ['homepage'] })
@@ -60,6 +73,8 @@ export function invalidateAfterPathB(queryClient, { lostItemId, matchId } = {}) 
 export function invalidateAfterVerification(queryClient, { lostItemId, foundItemId, matchId } = {}) {
   queryClient.invalidateQueries({ queryKey: ['my-matches'] })
   queryClient.invalidateQueries({ queryKey: ['my-matches-for-item'] })
+  queryClient.invalidateQueries({ queryKey: ['homepage'] })
+  queryClient.invalidateQueries({ queryKey: ['browse'] })
   if (matchId) {
     queryClient.invalidateQueries({ queryKey: ['path-a-form', matchId] })
     queryClient.invalidateQueries({ queryKey: ['path-a-status', matchId] })
@@ -83,6 +98,7 @@ export function invalidateAfterProfileUpdate(queryClient) {
 
 export function invalidateAfterReturn(queryClient, { matchId, returnId, lostItemId, foundItemId } = {}) {
   queryClient.invalidateQueries({ queryKey: ['my-returns'] })
+  queryClient.invalidateQueries({ queryKey: ['public-returned'] })
   queryClient.invalidateQueries({ queryKey: ['homepage'] })
   queryClient.invalidateQueries({ queryKey: ['browse'] })
   queryClient.invalidateQueries({ queryKey: ['my-lost-items'] })

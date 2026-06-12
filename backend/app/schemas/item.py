@@ -334,6 +334,7 @@ class BrowseItemCard(BaseModel):
     viewer_path_b_conversation_id: Optional[uuid.UUID] = None
     viewer_path_c_status: Optional[str] = None
     viewer_path_c_conversation_id: Optional[uuid.UUID] = None
+    viewer_chat_unlocked: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -362,6 +363,7 @@ class PublicReturnedItem(BaseModel):
     item_name: str
     returned_at: datetime
     university_short_name: str
+    finder_tipped: bool = False
 
     model_config = {"from_attributes": True}
 

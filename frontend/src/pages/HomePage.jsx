@@ -224,19 +224,25 @@ function SafetyBanner() {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function HomePage() {
-  const { isAuthenticated, user } = useAuth()
+  const { isAuthenticated, authReady, user } = useAuth()
   const navigate = useNavigate()
 
   const { data: matchData } = useQuery({
     queryKey: ['my-matches'],
     queryFn: getMyMatches,
-    enabled: isAuthenticated,
+    enabled: isAuthenticated && authReady,
   })
 
-  const { data: homepageData, isLoading } = useQuery({
-    queryKey: ['homepage', isAuthenticated],
+  const { data: homepageData, isLoading, isError, refetch } = useQuery({
+    queryKey: ['homepage'],
     queryFn: getHomepageData,
+    enabled: authReady,
     refetchInterval: 60_000,
+    retry: (failureCount, error) => {
+      if (error?.code === 'ERR_NETWORK') return failureCount < 3
+      return failureCount < 1
+    },
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 4000),
   })
 
   function handleCTA(path) {
@@ -298,9 +304,21 @@ export default function HomePage() {
 
       {/* ── Two-column preview ───────────────────────────────────────────── */}
       <section className="py-12 px-4 max-w-7xl mx-auto">
-        {isLoading ? (
+        {!authReady || isLoading ? (
           <div className="flex justify-center py-16">
             <div className="w-8 h-8 border-4 border-brand-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : isError ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center gap-3">
+            <p className="text-sm text-slate-600 dark:text-slate-400">
+              Could not load items. The backend may be offline.
+            </p>
+            <p className="text-xs text-slate-400">
+              Start it with: <code className="font-mono">uvicorn app.main:app --reload</code>
+            </p>
+            <button type="button" onClick={() => refetch()} className="btn-primary text-sm mt-2">
+              Retry
+            </button>
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_2px_1fr] gap-x-12 gap-y-10">

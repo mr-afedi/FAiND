@@ -672,6 +672,23 @@ def resume_matches_for_item(db: Session, item_id: uuid.UUID) -> int:
 
 # ── Read helpers ──────────────────────────────────────────────────────────────
 
+def is_ai_potential_match(match: PotentialMatch) -> bool:
+    """
+    True for Feature G AI matches only — not Path B/C claim bridge matches.
+    Bridge matches reuse PotentialMatch but must not show as AI potential matches.
+    """
+    breakdown = match.score_breakdown or {}
+    if breakdown.get("path") in ("path_b", "path_c"):
+        return False
+    found = match.found_item
+    lost = match.lost_item
+    if found is not None and getattr(found, "path_b_bridge", False):
+        return False
+    if lost is not None and getattr(lost, "path_c_bridge", False):
+        return False
+    return True
+
+
 def _live_matches_for_user_query(db: Session, user_id: uuid.UUID):
     """PotentialMatches involving the user's items; excludes archived items."""
     my_item_ids = [
@@ -720,6 +737,31 @@ def _live_matches_for_user_query(db: Session, user_id: uuid.UUID):
     )
 
 
+def get_chat_unlocked_item_ids(db: Session, user_id: uuid.UUID) -> set[uuid.UUID]:
+    """
+    Own + peer item IDs in verified matches with unlocked chat for this viewer.
+    Used by homepage/browse cards for the \"Chat Opened\" badge.
+    """
+    q = _live_matches_for_user_query(db, user_id)
+    if q is None:
+        return set()
+
+    result: set[uuid.UUID] = set()
+    for match in q.filter(PotentialMatch.status == PotentialMatchStatus.VERIFIED).all():
+        conv = (
+            db.query(Conversation)
+            .filter(
+                Conversation.potential_match_id == match.id,
+                Conversation.status == ConversationStatus.UNLOCKED,
+            )
+            .first()
+        )
+        if conv:
+            result.add(match.lost_item_id)
+            result.add(match.found_item_id)
+    return result
+
+
 def get_matched_item_ids(db: Session, user_id: uuid.UUID) -> set[uuid.UUID]:
     """
     Return ALL item IDs (own + opposing) that are part of an active/paused
@@ -733,15 +775,20 @@ def get_matched_item_ids(db: Session, user_id: uuid.UUID) -> set[uuid.UUID]:
 
     result: set[uuid.UUID] = set()
     for match in q.all():
+        if not is_ai_potential_match(match):
+            continue
         result.add(match.lost_item_id)
         result.add(match.found_item_id)
     return result
 
 
 def list_matches_for_user(db: Session, user_id: uuid.UUID) -> list[PotentialMatch]:
-    """All live matches where the user owns the lost or found item (archived excluded)."""
+    """Live AI matches where the user owns the lost or found item (archived excluded)."""
     q = _live_matches_for_user_query(db, user_id)
     if q is None:
         return []
 
-    return q.order_by(PotentialMatch.match_score.desc()).all()
+    return [
+        m for m in q.order_by(PotentialMatch.match_score.desc()).all()
+        if is_ai_potential_match(m)
+    ]

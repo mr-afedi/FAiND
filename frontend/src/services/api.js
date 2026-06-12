@@ -12,7 +12,14 @@
  */
 import axios from 'axios'
 
-const BASE_URL = import.meta.env.VITE_API_URL || '/api/v1'
+export function getApiBaseUrl() {
+  const configured = (import.meta.env.VITE_API_URL || '').trim()
+  if (!configured) return '/api/v1'
+  const root = configured.replace(/\/+$/, '')
+  return root.endsWith('/api/v1') ? root : `${root}/api/v1`
+}
+
+const BASE_URL = getApiBaseUrl()
 
 // ── In-memory access token (never stored in localStorage / sessionStorage) ──
 let _accessToken = null
@@ -40,9 +47,15 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 )
 
-// ── Response interceptor — silent refresh on 401 ───────────────────────────
+// ── Shared refresh (AuthContext + interceptor must use the same mutex) ───────
 let _isRefreshing = false
 let _failedQueue  = []
+let _authBootstrap = false
+
+/** True while AuthContext silent-refresh runs on hard reload. */
+export function setAuthBootstrapActive(active) {
+  _authBootstrap = Boolean(active)
+}
 
 const _processQueue = (error, token = null) => {
   _failedQueue.forEach((prom) => {
@@ -53,6 +66,40 @@ const _processQueue = (error, token = null) => {
     }
   })
   _failedQueue = []
+}
+
+/**
+ * Rotate the refresh cookie and return a new access token.
+ * Single-flight — concurrent callers share one in-flight refresh.
+ */
+export async function refreshAccessToken({ emitExpired = true } = {}) {
+  if (_isRefreshing) {
+    return new Promise((resolve, reject) => {
+      _failedQueue.push({ resolve, reject })
+    })
+  }
+
+  _isRefreshing = true
+  try {
+    const { data } = await axios.post(
+      `${BASE_URL}/auth/refresh`,
+      {},
+      { withCredentials: true },
+    )
+    const newToken = data.access_token
+    setAccessToken(newToken)
+    _processQueue(null, newToken)
+    return newToken
+  } catch (refreshError) {
+    _processQueue(refreshError, null)
+    clearAccessToken()
+    if (emitExpired && !_authBootstrap) {
+      window.dispatchEvent(new CustomEvent('faind:auth:expired'))
+    }
+    throw refreshError
+  } finally {
+    _isRefreshing = false
+  }
 }
 
 api.interceptors.response.use(
@@ -66,45 +113,14 @@ api.interceptors.response.use(
       !originalRequest._retry &&
       originalRequest.url !== '/auth/refresh'
     ) {
-      if (_isRefreshing) {
-        // Queue requests that arrive while a refresh is already in-flight
-        return new Promise((resolve, reject) => {
-          _failedQueue.push({ resolve, reject })
-        })
-          .then((token) => {
-            originalRequest.headers['Authorization'] = `Bearer ${token}`
-            return api(originalRequest)
-          })
-          .catch((err) => Promise.reject(err))
-      }
-
       originalRequest._retry = true
-      _isRefreshing = true
 
       try {
-        const { data } = await axios.post(
-          `${BASE_URL}/auth/refresh`,
-          {},
-          { withCredentials: true }
-        )
-
-        const newToken = data.access_token
-        setAccessToken(newToken)
-        _processQueue(null, newToken)
-
+        const newToken = await refreshAccessToken({ emitExpired: !_authBootstrap })
         originalRequest.headers['Authorization'] = `Bearer ${newToken}`
         return api(originalRequest)
-
       } catch (refreshError) {
-        _processQueue(refreshError, null)
-        clearAccessToken()
-
-        // Emit a custom event so AuthContext can clear state and redirect
-        window.dispatchEvent(new CustomEvent('faind:auth:expired'))
-
         return Promise.reject(refreshError)
-      } finally {
-        _isRefreshing = false
       }
     }
 

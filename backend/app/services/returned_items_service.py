@@ -191,7 +191,6 @@ def archive_completed_returns(db: Session) -> int:
         db.query(ItemReturn)
         .filter(
             ItemReturn.returned_at.isnot(None),
-            ItemReturn.dispute_filed_at.is_(None),
             ItemReturn.tipping_window_ends_at.isnot(None),
             ItemReturn.tipping_window_ends_at < now,
         )
@@ -199,6 +198,10 @@ def archive_completed_returns(db: Session) -> int:
     )
     count = 0
     for record in rows:
+        if record.dispute_filed_at and not record.dispute_resolved_at:
+            continue
+        if record.admin_review_flagged and not record.dispute_resolved_at:
+            continue
         for item_id in (record.lost_item_id, record.found_item_id):
             item = db.query(Item).filter(Item.id == item_id).first()
             if item and item.status == ItemStatus.RETURNED:

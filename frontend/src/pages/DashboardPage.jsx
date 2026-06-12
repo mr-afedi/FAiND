@@ -641,7 +641,7 @@ export default function DashboardPage() {
           />
           <StatCard
             label="Tips Received"
-            value={0}
+            value={profile.tips_received_count ?? 0}
             icon={<CircleDollarSign className="w-6 h-6" aria-hidden />}
             sub="Count only"
           />

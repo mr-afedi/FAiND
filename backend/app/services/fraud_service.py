@@ -291,6 +291,29 @@ def record_gradual_improvement(
     )
 
 
+def record_dispute_user_flagged(
+    db: Session,
+    *,
+    user_id: uuid.UUID,
+    university_id: uuid.UUID,
+    return_id: uuid.UUID,
+    admin_id: uuid.UUID,
+    note: str,
+) -> FraudEvent:
+    """Section 19.4 — admin flags a user during dispute resolution."""
+    return apply_fraud_delta(
+        db,
+        user_id=user_id,
+        university_id=university_id,
+        delta=15,
+        signal_type=FraudSignalType.DISPUTE_USER_FLAGGED,
+        reference_id=return_id,
+        detail={"dispute_outcome": "flagged", "admin_note": note[:200]},
+        applied_by_id=admin_id,
+        notify_admin=True,
+    )
+
+
 def record_user_report(
     db: Session,
     *,
@@ -353,13 +376,12 @@ def admin_clear_fraud_flag(
     target_user_id: uuid.UUID,
     admin: User,
 ) -> FraudEvent:
-    """Reset fraud risk to 0 and log admin clear."""
+    """Reset fraud risk to 0, clear verification override, and log admin clear."""
     target = db.query(User).filter(User.id == target_user_id).first()
     if not target:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    target.fraud_verification_override = False
     delta = -target.fraud_risk_score
-    if delta == 0:
-        delta = 0
     return apply_fraud_delta(
         db,
         user_id=target.id,
@@ -449,13 +471,18 @@ def list_fraud_alerts(db: Session, *, limit: int = 50) -> list[dict]:
             .order_by(FraudEvent.created_at.desc())
             .first()
         )
+        override = getattr(u, "fraud_verification_override", False)
         out.append(
             {
                 "user_id": u.id,
                 "email": u.email,
+                "username": u.username,
+                "full_name": u.full_name,
+                "trust_score": u.trust_score,
                 "fraud_risk_score": u.fraud_risk_score,
                 "risk_tier": get_risk_tier(u.fraud_risk_score),
-                "verification_blocked": u.fraud_risk_score >= BLOCK_THRESHOLD,
+                "verification_blocked": u.fraud_risk_score >= BLOCK_THRESHOLD and not override,
+                "fraud_verification_override": override,
                 "last_signal": last_event.signal_type.value if last_event else None,
                 "last_event_at": last_event.created_at if last_event else None,
             }
@@ -484,11 +511,13 @@ def get_user_fraud_summary(db: Session, user_id: uuid.UUID) -> dict:
         .filter(FraudEvent.user_id == user_id)
         .scalar()
     ) or 0
+    override = getattr(user, "fraud_verification_override", False)
     return {
         "user_id": user.id,
         "email": user.email,
         "fraud_risk_score": user.fraud_risk_score,
         "risk_tier": get_risk_tier(user.fraud_risk_score),
-        "verification_blocked": user.fraud_risk_score >= BLOCK_THRESHOLD,
+        "verification_blocked": user.fraud_risk_score >= BLOCK_THRESHOLD and not override,
+        "fraud_verification_override": override,
         "event_count": event_count,
     }

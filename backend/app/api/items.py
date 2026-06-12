@@ -32,7 +32,11 @@ from app.schemas.item import (
     PublicReturnedListResponse,
 )
 import app.services.item_service as item_service
-from app.services.matching_service import run_matching_background, get_matched_item_ids
+from app.services.matching_service import (
+    run_matching_background,
+    get_matched_item_ids,
+    get_chat_unlocked_item_ids,
+)
 
 router = APIRouter(prefix="/items", tags=["items"])
 
@@ -120,6 +124,7 @@ def browse_public(
     parsed_statuses = [ItemStatus(s)    for s in item_status] if item_status else None
     matched_ids     = get_matched_item_ids(db, current_user.id) if current_user else None
     viewer_id       = current_user.id if current_user else None
+    chat_unlocked   = get_chat_unlocked_item_ids(db, current_user.id) if current_user else None
 
     return item_service.browse_items(
         db,
@@ -135,6 +140,7 @@ def browse_public(
         limit=limit,
         viewer_matched_ids=matched_ids,
         viewer_id=viewer_id,
+        chat_unlocked_ids=chat_unlocked,
     )
 
 

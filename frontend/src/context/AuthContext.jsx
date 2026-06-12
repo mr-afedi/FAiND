@@ -1,13 +1,20 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import axios from 'axios'
-import { setAccessToken, clearAccessToken } from '../services/api'
+import { useQueryClient } from '@tanstack/react-query'
+import {
+  clearAccessToken,
+  refreshAccessToken,
+  setAccessToken,
+  setAuthBootstrapActive,
+} from '../services/api'
 import { authService } from '../services/authService'
+import { invalidateAfterAuthSession } from '../utils/queryCache'
 
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [user, setUser]       = useState(null)
   const [loading, setLoading] = useState(true)
 
@@ -17,13 +24,15 @@ export function AuthProvider({ children }) {
     setAccessToken(accessToken)
     setUser(userObj)
     localStorage.setItem(SESSION_FLAG, '1')
-  }, [])
+    invalidateAfterAuthSession(queryClient)
+  }, [queryClient])
 
   const _clearSession = useCallback(() => {
     clearAccessToken()
     setUser(null)
     localStorage.removeItem(SESSION_FLAG)
-  }, [])
+    invalidateAfterAuthSession(queryClient)
+  }, [queryClient])
 
   // ── On hard reload: attempt silent token refresh ──────────────────────────
   useEffect(() => {
@@ -35,24 +44,21 @@ export function AuthProvider({ children }) {
     }
 
     ;(async () => {
+      setAuthBootstrapActive(true)
       try {
-        const base = import.meta.env.VITE_API_URL || '/api/v1'
-        const { data } = await axios.post(
-          `${base}/auth/refresh`,
-          {},
-          { withCredentials: true }
-        )
-        setAccessToken(data.access_token)
+        await refreshAccessToken({ emitExpired: false })
         const me = await authService.getMe()
         setUser(me)
         localStorage.setItem(SESSION_FLAG, '1')
+        invalidateAfterAuthSession(queryClient)
       } catch {
         _clearSession()
       } finally {
+        setAuthBootstrapActive(false)
         setLoading(false)
       }
     })()
-  }, [_clearSession])
+  }, [_clearSession, queryClient])
 
   // ── Auth expiry (emitted by Axios interceptor) ────────────────────────────
   // IMPORTANT: do NOT call navigate() here synchronously.
@@ -102,6 +108,8 @@ export function AuthProvider({ children }) {
   const value = {
     user,
     loading,
+    /** False while silent refresh runs on hard reload — gate data fetches on this. */
+    authReady: !loading,
     isAuthenticated: !!user,
     login,
     totpVerify,

@@ -59,25 +59,19 @@ export function getViewerBadge(item, userId, matches, scope = {}) {
     return PATH_C_BADGE[item.viewer_path_c_status] || null
   }
 
-  if (!matches?.length) return null
+  // Chat unlocked — homepage + browse: own item and matched peer item
+  if (homepage || browse) {
+    if (item.viewer_chat_unlocked) return 'Chat Opened'
+    if (matches?.length) {
+      const chatOpen = matches.some(
+        (m) => matchChatUnlocked(m)
+          && (idEq(m.lost_item?.id, itemId) || idEq(m.found_item?.id, itemId)),
+      )
+      if (chatOpen) return 'Chat Opened'
+    }
+  }
 
-  // Chat unlocked — homepage only, each party on their own item card
-  if (homepage && isLost && isOwner) {
-    const chatOpen = matches.some(
-      (m) => m.user_role === 'lost_owner'
-        && idEq(m.lost_item?.id, itemId)
-        && matchChatUnlocked(m),
-    )
-    if (chatOpen) return 'Chat Opened'
-  }
-  if (homepage && isFound && isOwner) {
-    const chatOpen = matches.some(
-      (m) => m.user_role === 'found_owner'
-        && idEq(m.found_item?.id, itemId)
-        && matchChatUnlocked(m),
-    )
-    if (chatOpen) return 'Chat Opened'
-  }
+  if (!matches?.length) return null
 
   // User A — own lost item (homepage only); after User A submits verification
   if (homepage && isLost && isOwner) {

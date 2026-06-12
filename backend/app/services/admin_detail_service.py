@@ -26,6 +26,7 @@ from app.models.this_might_be_mine_claim import ThisMightBeMineClaim
 from app.models.trust_event import TrustEvent
 from app.models.user import User
 from app.models.verification_attempt import VerificationAttempt, VerificationPath
+from app.models.tip_payment import TipPayment, TipPaymentStatus
 from app.services.trust_service import get_trust_tier
 from app.services.fraud_service import get_risk_tier
 
@@ -34,6 +35,49 @@ SCORING_FORMULAS = {
     "path_b": "Path B: 0.40×hidden + 0.35×image + 0.25×location (review at 0.50–0.75)",
     "path_c": "Path C: 1.0×hidden answer similarity only (review at 0.50–0.70)",
 }
+
+
+def _recent_admin_actions(
+    db: Session,
+    target_type: str,
+    target_id: uuid.UUID,
+    *,
+    limit: int = 5,
+) -> list[dict]:
+    rows = (
+        db.query(AdminLog)
+        .filter(AdminLog.target_type == target_type, AdminLog.target_id == target_id)
+        .order_by(AdminLog.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    out = []
+    for row in rows:
+        actor = db.query(User).filter(User.id == row.admin_id).first() if row.admin_id else None
+        out.append(
+            {
+                "action": row.action.value,
+                "admin_email": actor.email if actor else "system",
+                "admin_id": row.admin_id,
+                "detail": row.detail or {},
+                "created_at": row.created_at,
+            }
+        )
+    return out
+
+
+def _detect_gradual_improvement(scores: list[float]) -> bool:
+    if len(scores) < 3:
+        return False
+    return all(scores[i] > scores[i - 1] for i in range(1, len(scores)))
+
+
+def _score_color(sim: float) -> str:
+    if sim >= 0.7:
+        return "green"
+    if sim >= 0.5:
+        return "amber"
+    return "red"
 
 
 def _user_brief(db: Session, user_id: uuid.UUID | None) -> dict | None:
@@ -226,6 +270,15 @@ def get_claim_detail(db: Session, match_id: uuid.UUID) -> dict:
             "verification_detail": _sanitize_path_c_detail(claim_obj.verification_detail or {}),
         }
 
+    attempt_scores: list[float] = []
+    for att in evidence.get("verification_attempts", []):
+        if att.get("ownership_score") is not None:
+            attempt_scores.append(float(att["ownership_score"]))
+    if path == "path_b" and isinstance(claim_obj, IHaveThisItemClaim):
+        attempt_scores = [float(s) for s in (claim_obj.attempt_scores or [])]
+    elif path == "path_c" and isinstance(claim_obj, ThisMightBeMineClaim):
+        attempt_scores = [float(s) for s in (claim_obj.attempt_scores or [])]
+
     return {
         "match_id": match.id,
         "path": path,
@@ -238,6 +291,9 @@ def get_claim_detail(db: Session, match_id: uuid.UUID) -> dict:
         "found_item": _item_detail(db, match.found_item),
         "evidence": evidence,
         "status_history": _item_status_history(db, match.lost_item_id),
+        "gradual_improvement_detected": _detect_gradual_improvement(attempt_scores),
+        "attempt_scores": attempt_scores,
+        "recent_actions": _recent_admin_actions(db, "potential_match", match.id),
     }
 
 
@@ -340,6 +396,7 @@ def _return_dispute_detail(db: Session, record: ItemReturn, *, dispute_type: str
         "reports_on_parties": _reports_for_users(
             db, [record.lost_owner_id, record.found_owner_id]
         ),
+        "recent_actions": _recent_admin_actions(db, "item_return", record.id),
     }
 
 
@@ -385,6 +442,7 @@ def _verification_dispute_detail(db: Session, match: PotentialMatch) -> dict:
             db,
             [match.lost_item.posted_by_id] if match.lost_item else [],
         ),
+        "recent_actions": _recent_admin_actions(db, "potential_match", match.id),
     }
 
 
@@ -478,6 +536,7 @@ def get_report_detail(
                 for s in siblings
             ],
             "distinct_reporters": len({s.reporter_id for s in siblings}),
+            "recent_actions": _recent_admin_actions(db, "post_report", report.id),
         }
 
     report = (
@@ -518,6 +577,7 @@ def get_report_detail(
             for s in siblings
         ],
         "distinct_reporters": len({s.reporter_id for s in siblings}),
+        "recent_actions": _recent_admin_actions(db, "user_report", report.id),
     }
 
 
@@ -573,6 +633,7 @@ def get_post_detail(db: Session, item_id: uuid.UUID) -> dict:
             for r in reports
         ],
         "pending_reports": sum(1 for r in reports if r.status == ReportStatus.PENDING),
+        "recent_actions": _recent_admin_actions(db, "item", item_id),
     }
 
 
@@ -751,16 +812,120 @@ def get_user_detail(db: Session, user_id: uuid.UUID) -> dict:
             }
             for log in suspension_logs
         ],
+        "recent_actions": _recent_admin_actions(db, "user", user_id),
     }
 
 
 def get_fraud_detail(db: Session, user_id: uuid.UUID) -> dict:
+    from app.services.fraud_service import BLOCK_THRESHOLD, get_risk_tier
+
     detail = get_user_detail(db, user_id)
+    override = detail["profile"].get("fraud_verification_override", False)
+    score = detail["fraud_risk_score"]
     return {
         "user": detail["profile"],
-        "fraud_risk_score": detail["fraud_risk_score"],
-        "fraud_risk_tier": detail["fraud_risk_tier"],
+        "fraud_risk_score": score,
+        "fraud_risk_tier": detail["fraud_risk_tier"] or get_risk_tier(score),
+        "verification_blocked": score >= BLOCK_THRESHOLD and not override,
+        "fraud_verification_override": override,
         "fraud_events": detail["fraud_events"],
         "trust_score": detail["trust_score"],
         "trust_tier": detail["trust_tier"],
+        "trust_events": detail["trust_events"],
+        "items_posted": detail["items_posted"],
+        "claims": detail["claims"],
+        "reports_made": detail["reports_made"],
+        "reports_received": detail["reports_received"],
+        "recent_actions": detail["recent_actions"],
+    }
+
+
+def get_returned_item_detail(db: Session, return_id: uuid.UUID) -> dict:
+    record = db.query(ItemReturn).filter(ItemReturn.id == return_id).first()
+    if not record or not record.returned_at:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Return not found.")
+
+    lost_item = db.query(Item).filter(Item.id == record.lost_item_id).first()
+    found_item = db.query(Item).filter(Item.id == record.found_item_id).first()
+    owner = _user_brief(db, record.lost_owner_id)
+    finder = _user_brief(db, record.found_owner_id)
+
+    match = (
+        db.query(PotentialMatch)
+        .filter(PotentialMatch.id == record.potential_match_id)
+        .first()
+    )
+    path, _, _ = _detect_claim_path(db, match) if match else ("path_a", None, None)
+    approval_score = float(match.match_score) if match and match.match_score is not None else None
+
+    tip_payload: dict
+    tip_row = (
+        db.query(TipPayment)
+        .filter(
+            TipPayment.return_id == record.id,
+            TipPayment.status == TipPaymentStatus.SUCCESS,
+        )
+        .order_by(TipPayment.paid_at.desc())
+        .first()
+    )
+    if tip_row:
+        from app.services import tipping_service
+
+        tip_detail = tipping_service.admin_tip_detail(db, tip_row)
+        tip_payload = {
+            "tipped": True,
+            "amount_ghs": tip_detail["amount_ghs"],
+            "currency": tip_detail["currency"],
+            "paid_at": tip_detail["paid_at"],
+            "status": tip_detail["status"],
+        }
+    else:
+        tip_payload = {"tipped": False, "message": "No tip sent"}
+
+    dispute_open = bool(
+        record.dispute_filed_at
+        or (record.admin_review_flagged and not record.dispute_resolved_at)
+    )
+    dispute_type = None
+    if record.dispute_filed_at and not record.dispute_resolved_at:
+        dispute_type = "return"
+    elif record.admin_review_flagged and not record.dispute_resolved_at:
+        dispute_type = "manual"
+
+    method_label = None
+    if record.method:
+        method_label = (
+            "Dual confirmation"
+            if record.method.value == "dual_confirm"
+            else "QR code scan"
+        )
+
+    return {
+        "return_id": record.id,
+        "lost_item": _item_detail(db, lost_item),
+        "found_item": _item_detail(db, found_item),
+        "owner": owner,
+        "finder": finder,
+        "location_lost": lost_item.location_label if lost_item else None,
+        "location_found": found_item.location_label if found_item else None,
+        "date_lost": lost_item.date_occurred if lost_item else None,
+        "date_found": found_item.date_occurred if found_item else None,
+        "date_returned": record.returned_at,
+        "return_method": method_label,
+        "verification_path": path,
+        "approval_score": approval_score,
+        "tip": tip_payload,
+        "dispute": {
+            "had_dispute": bool(record.dispute_filed_at or record.dispute_resolved_at or record.admin_review_flagged),
+            "open": dispute_open,
+            "dispute_type": dispute_type,
+            "return_id": record.id,
+            "filed_at": record.dispute_filed_at,
+            "resolved_at": record.dispute_resolved_at,
+            "reason": record.dispute_reason,
+            "resolution_note": record.dispute_resolution_note,
+            "tip_frozen": record.tip_frozen,
+        },
+        "chat_history": _chat_for_match(db, record.potential_match_id),
+        "can_open_dispute": not dispute_open,
     }

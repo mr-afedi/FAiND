@@ -72,7 +72,7 @@ export default function MessagesPage() {
   const userId = user?.id
   const [search, setSearch] = useState('')
   const [draft, setDraft] = useState('')
-  const messagesEndRef = useRef(null)
+  const messagesScrollRef = useRef(null)
   const [messages, setMessages] = useState([])
   const { isSubmitting, tryAcquire, release } = useSubmitLock()
   const [reportOpen, setReportOpen] = useState(false)
@@ -162,7 +162,10 @@ export default function MessagesPage() {
   })
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const el = messagesScrollRef.current
+    if (el) {
+      el.scrollTop = el.scrollHeight
+    }
   }, [messages])
 
   const filtered = useMemo(() => {
@@ -191,20 +194,20 @@ export default function MessagesPage() {
   const showChatOnMobile = Boolean(selectedId)
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col">
+    <div className="h-screen bg-slate-50 dark:bg-slate-950 flex flex-col overflow-hidden">
       <NavBar />
-      <div className="page-container flex-1 flex flex-col py-4 max-w-6xl min-h-0">
-        <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100 mb-4 hidden lg:block">
+      <div className="page-container flex-1 flex flex-col min-h-0 py-4 max-w-6xl">
+        <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100 mb-4 hidden lg:block shrink-0">
           Messages
         </h1>
 
-        <div className="flex flex-1 gap-4 min-h-0 rounded-2xl overflow-hidden border border-slate-200/80 dark:border-slate-700/50 bg-white/80 dark:bg-slate-900/40 shadow-sm" style={{ minHeight: 'calc(100vh - 8rem)' }}>
+        <div className="flex flex-1 min-h-0 gap-4 rounded-2xl overflow-hidden border border-slate-200/80 dark:border-slate-700/50 bg-white/80 dark:bg-slate-900/40 shadow-sm">
           {/* Inbox list */}
           <aside
-            className={`flex flex-col w-full lg:w-80 lg:shrink-0 border-r border-slate-200/80 dark:border-slate-700/50
+            className={`flex flex-col min-h-0 w-full lg:w-80 lg:shrink-0 border-r border-slate-200/80 dark:border-slate-700/50 overflow-hidden
                         ${showListOnMobile ? 'flex' : 'hidden'} lg:flex`}
           >
-            <div className="p-3 border-b border-slate-200/80 dark:border-slate-700/50">
+            <div className="p-3 border-b border-slate-200/80 dark:border-slate-700/50 shrink-0">
               <input
                 type="search"
                 placeholder="Search by name or item…"
@@ -213,7 +216,7 @@ export default function MessagesPage() {
                 className="input-field text-sm"
               />
             </div>
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain">
               {inboxLoading && (
                 <p className="text-sm text-slate-400 p-4 text-center">Loading…</p>
               )}
@@ -261,7 +264,7 @@ export default function MessagesPage() {
 
           {/* Chat panel */}
           <section
-            className={`flex-1 flex flex-col min-w-0 min-h-0
+            className={`flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden
                         ${showChatOnMobile ? 'flex' : 'hidden'} lg:flex`}
           >
             {!selectedId && (
@@ -310,7 +313,10 @@ export default function MessagesPage() {
                   <p className="text-xs text-amber-900 dark:text-amber-200 leading-relaxed">{SAFETY_TEXT}</p>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+                <div
+                  ref={messagesScrollRef}
+                  className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain p-4 space-y-3"
+                >
                   {messagesLoading && (
                     <p className="text-center text-sm text-slate-400">Loading messages…</p>
                   )}
@@ -334,7 +340,6 @@ export default function MessagesPage() {
                       </div>
                     </div>
                   ))}
-                  <div ref={messagesEndRef} />
                 </div>
 
                 {detail.is_frozen || !detail.can_send ? (

@@ -49,7 +49,7 @@ def _build_public_profile(db: Session, user: User, university: University) -> Pu
     )
 
 
-def _build_own_profile(user: User, university: University) -> OwnProfileResponse:
+def _build_own_profile(db: Session, user: User, university: University) -> OwnProfileResponse:
     return OwnProfileResponse(
         id=user.id,
         email=user.email,
@@ -67,6 +67,7 @@ def _build_own_profile(user: User, university: University) -> OwnProfileResponse
         push_notifications_enabled=user.push_notifications_enabled,
         email_notifications_enabled=user.email_notifications_enabled,
         member_since=_member_since(user.created_at),
+        tips_received_count=_count_tips_received(db, user.id),
     )
 
 
@@ -74,7 +75,7 @@ def _build_own_profile(user: User, university: University) -> OwnProfileResponse
 
 def get_own_profile(db: Session, user: User) -> OwnProfileResponse:
     university = db.query(University).filter(University.id == user.university_id).first()
-    return _build_own_profile(user, university)
+    return _build_own_profile(db, user, university)
 
 
 def get_public_profile(db: Session, username: str) -> PublicProfileResponse:
@@ -101,7 +102,7 @@ def update_profile(db: Session, user: User, data: UpdateProfileRequest) -> OwnPr
     db.commit()
     db.refresh(user)
     university = db.query(University).filter(University.id == user.university_id).first()
-    return _build_own_profile(user, university)
+    return _build_own_profile(db, user, university)
 
 
 # ── Change password ───────────────────────────────────────────────────────────
@@ -137,7 +138,7 @@ def update_settings(db: Session, user: User, data: UpdateSettingsRequest) -> Own
     db.commit()
     db.refresh(user)
     university = db.query(University).filter(University.id == user.university_id).first()
-    return _build_own_profile(user, university)
+    return _build_own_profile(db, user, university)
 
 
 # ── Delete account ────────────────────────────────────────────────────────────

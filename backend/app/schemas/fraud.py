@@ -9,9 +9,13 @@ from pydantic import BaseModel
 class FraudAlertUser(BaseModel):
     user_id: uuid.UUID
     email: str
+    username: str
+    full_name: str
+    trust_score: int
     fraud_risk_score: int
     risk_tier: str
     verification_blocked: bool
+    fraud_verification_override: bool = False
     last_signal: Optional[str] = None
     last_event_at: Optional[datetime] = None
 
@@ -40,6 +44,7 @@ class FraudUserSummary(BaseModel):
     fraud_risk_score: int
     risk_tier: str
     verification_blocked: bool
+    fraud_verification_override: bool = False
     event_count: int
 
 

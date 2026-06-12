@@ -128,6 +128,25 @@ function Lightbox({ images, startIdx, onClose }) {
   )
 }
 
+// ── Compact action helpers ────────────────────────────────────────────────────
+
+function ItemBanner({ tone = 'slate', children, className = '' }) {
+  return (
+    <p className={`item-banner item-banner--${tone} ${className}`}>
+      {children}
+    </p>
+  )
+}
+
+function ItemBannerWithAction({ tone = 'green', message, action }) {
+  return (
+    <div className={`item-banner-row item-banner-row--${tone}`}>
+      <span className="text-left flex-1 min-w-0">{message}</span>
+      {action}
+    </div>
+  )
+}
+
 // ── Item detail page ──────────────────────────────────────────────────────────
 
 export default function ItemDetailPage() {
@@ -152,15 +171,17 @@ export default function ItemDetailPage() {
     enabled: Boolean(isAuthenticated),
   })
 
+  const isPathCMatch = (m) => m?.score_breakdown?.path === 'path_c'
+  const isPathBMatch = (m) => m?.score_breakdown?.path === 'path_b'
+
   const ownerMatch = pickPrimaryMatch(
     matchData?.matches,
     (m) => m.user_role === 'lost_owner'
       && String(m.lost_item?.id) === String(itemId)
+      && !isPathBMatch(m)
+      && !isPathCMatch(m)
       && ['active', 'pending_review', 'verified'].includes(m.status),
   )
-
-  const isPathCMatch = (m) => m?.score_breakdown?.path === 'path_c'
-  const isPathBMatch = (m) => m?.score_breakdown?.path === 'path_b'
 
   const matchAsLostOwnerOnFound = pickPrimaryMatch(
     matchData?.matches,
@@ -401,7 +422,7 @@ export default function ItemDetailPage() {
             </div>
 
             {/* Meta info */}
-            <div className="glass p-4 rounded-2xl flex flex-col gap-2 text-sm">
+            <div className="glass p-3 rounded-xl flex flex-col gap-1.5 text-sm">
               <div className="flex justify-between">
                 <span className="text-slate-500 dark:text-slate-400">Location</span>
                 <span className="font-medium text-slate-700 dark:text-slate-300 inline-flex items-center gap-1">
@@ -445,7 +466,7 @@ export default function ItemDetailPage() {
             </div>
 
             {/* Poster info */}
-            <div className="flex items-center gap-3 p-4 glass rounded-2xl">
+            <div className="flex items-center gap-3 p-3 glass rounded-xl">
               <Link to={`/profile/${poster?.username}`}
                     className="flex-shrink-0 w-10 h-10 rounded-full bg-brand-600
                                flex items-center justify-center text-white text-sm font-bold
@@ -466,161 +487,135 @@ export default function ItemDetailPage() {
             </div>
 
             {/* ── Action buttons ── */}
-            <div className="flex flex-col gap-2 mt-auto">
+            <div className="item-action-stack mt-auto">
               {/* Non-owner, logged-in or guest */}
               {!isOwner && (
                 <>
                   {lostOwnerViewingMatchedFound && matchAsLostOwnerOnFound?.status === 'pending_review' && (
-                    <p className="text-sm text-center text-amber-700 dark:text-amber-300 py-3 px-4
-                                  rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200/80
-                                  dark:border-amber-800/50">
+                    <ItemBanner tone="amber">
                       Your ownership verification for this item is currently under admin review.
-                    </p>
+                    </ItemBanner>
                   )}
                   {lostOwnerViewingMatchedFound && matchAsLostOwnerOnFound?.status === 'active' && (
                     <Link
                       to={`/verify-ownership/${matchAsLostOwnerOnFound.id}`}
-                      className="btn-primary w-full py-3 text-sm font-semibold text-center"
+                      className="btn-primary item-action-btn text-center"
                     >
                       Verify Ownership
                     </Link>
                   )}
                   {lostOwnerViewingMatchedFound && matchAsLostOwnerOnFound?.status === 'verified'
                     && matchAsLostOwnerOnFound.conversation_id && (
-                    <Link
-                      to={`/messages/${matchAsLostOwnerOnFound.conversation_id}`}
-                      className="btn-primary w-full py-3 text-sm font-semibold text-center"
-                    >
-                      Open Chat
-                    </Link>
+                    <ItemBannerWithAction
+                      tone="green"
+                      message="Ownership verified — chat is open"
+                      action={(
+                        <Link
+                          to={`/messages/${matchAsLostOwnerOnFound.conversation_id}`}
+                          className="item-btn-inline"
+                        >
+                          Open Chat
+                        </Link>
+                      )}
+                    />
                   )}
                   {foundOwnerViewingMatchedLost && !pathBStatus && (
-                    <p className="text-sm text-center text-violet-700 dark:text-violet-300 py-3 px-4
-                                  rounded-xl bg-violet-50 dark:bg-violet-900/20 border border-violet-200/80
-                                  dark:border-violet-800/50">
+                    <ItemBanner tone="violet">
                       An ownership claim is in progress for your matched item
-                    </p>
+                    </ItemBanner>
                   )}
                   {foundOwnerChatOpenOnLost && !pathBStatus && (
-                    <p className="text-sm text-center text-green-700 dark:text-green-300 py-3 px-4
-                                  rounded-xl bg-green-50 dark:bg-green-900/20 border border-green-200/80
-                                  dark:border-green-800/50">
+                    <ItemBanner tone="green">
                       You are matched with this item and chat is open
-                    </p>
+                    </ItemBanner>
                   )}
                   {foundOwnerMatchedOnLost && matchAsFoundOwnerOnLost?.status === 'active' && !pathBStatus && (
-                    <p className="text-sm text-center text-slate-600 dark:text-slate-400 py-3 px-4
-                                  rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80
-                                  dark:border-slate-700/50">
+                    <ItemBanner tone="slate">
                       You are already matched with this item. Waiting for the owner to verify ownership.
-                    </p>
+                    </ItemBanner>
                   )}
                   {pathBStatus === 'rejected' && (
-                    <div className="flex flex-col gap-2">
-                      <p className="text-sm text-center text-red-700 dark:text-red-300 py-3 px-4
-                                    rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200/80
-                                    dark:border-red-800/50">
-                        Claim not approved
-                      </p>
+                    <div className="item-action-stack">
+                      <ItemBanner tone="red">Claim not approved</ItemBanner>
                       <button
                         onClick={() => handleClaimAction('b')}
-                        className="btn-secondary w-full py-3 text-sm font-semibold"
+                        className="btn-secondary item-action-btn"
                       >
                         Try Again
                       </button>
                     </div>
                   )}
                   {pathBStatus === 'under_review' && (
-                    <p className="text-sm text-center text-amber-700 dark:text-amber-300 py-3 px-4
-                                  rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200/80
-                                  dark:border-amber-800/50">
-                      Your claim is under admin review
-                    </p>
+                    <ItemBanner tone="amber">Your claim is under admin review</ItemBanner>
                   )}
                   {pathBStatus === 'approved' && (
-                    <div className="flex flex-col gap-2">
-                      <p className="text-sm text-center text-green-700 dark:text-green-300 py-3 px-4
-                                    rounded-xl bg-green-50 dark:bg-green-900/20 border border-green-200/80
-                                    dark:border-green-800/50">
-                        Your claim was approved — chat is open
-                      </p>
-                      {pathBConversationId && (
-                        <Link
-                          to={`/messages/${pathBConversationId}`}
-                          className="btn-primary w-full py-3 text-sm font-semibold text-center"
-                        >
-                          Open Chat
-                        </Link>
-                      )}
-                    </div>
+                    pathBConversationId ? (
+                      <ItemBannerWithAction
+                        tone="green"
+                        message="Your claim was approved — chat is open"
+                        action={(
+                          <Link to={`/messages/${pathBConversationId}`} className="item-btn-inline">
+                            Open Chat
+                          </Link>
+                        )}
+                      />
+                    ) : (
+                      <ItemBanner tone="green">Your claim was approved — chat is open</ItemBanner>
+                    )
                   )}
                   {pathBStatus === 'exhausted' && (
-                    <p className="text-sm text-center text-slate-600 dark:text-slate-400 py-3 px-4
-                                  rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80
-                                  dark:border-slate-700/50">
+                    <ItemBanner tone="slate">
                       You have reached the maximum number of attempts for this item
-                    </p>
+                    </ItemBanner>
                   )}
                   {!lostOwnerViewingMatchedFound && !pathBStatus && !foundOwnerMatchedOnLost && isClaimable && isLost && (
                     <button
                       onClick={() => handleClaimAction('b')}
-                      className="btn-primary w-full py-3 text-sm font-semibold inline-flex items-center justify-center gap-2"
+                      className="btn-primary item-action-btn inline-flex items-center justify-center gap-2"
                     >
                       <Hand className="w-4 h-4 shrink-0" aria-hidden />
                       I Have This Item
                     </button>
                   )}
                   {pathCStatus === 'rejected' && (
-                    <div className="flex flex-col gap-2">
-                      <p className="text-sm text-center text-red-700 dark:text-red-300 py-3 px-4
-                                    rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200/80
-                                    dark:border-red-800/50">
-                        Claim not approved
-                      </p>
+                    <div className="item-action-stack">
+                      <ItemBanner tone="red">Claim not approved</ItemBanner>
                       <button
                         onClick={() => handleClaimAction('c')}
-                        className="btn-secondary w-full py-3 text-sm font-semibold"
+                        className="btn-secondary item-action-btn"
                       >
                         Try Again
                       </button>
                     </div>
                   )}
                   {pathCStatus === 'under_review' && (
-                    <p className="text-sm text-center text-amber-700 dark:text-amber-300 py-3 px-4
-                                  rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200/80
-                                  dark:border-amber-800/50">
-                      Your claim is under admin review
-                    </p>
+                    <ItemBanner tone="amber">Your claim is under admin review</ItemBanner>
                   )}
                   {pathCStatus === 'approved' && (
-                    <div className="flex flex-col gap-2">
-                      <p className="text-sm text-center text-green-700 dark:text-green-300 py-3 px-4
-                                    rounded-xl bg-green-50 dark:bg-green-900/20 border border-green-200/80
-                                    dark:border-green-800/50">
-                        Your claim was approved — chat is open
-                      </p>
-                      {pathCConversationId && (
-                        <Link
-                          to={`/messages/${pathCConversationId}`}
-                          className="btn-primary w-full py-3 text-sm font-semibold text-center"
-                        >
-                          Open Chat
-                        </Link>
-                      )}
-                    </div>
+                    pathCConversationId ? (
+                      <ItemBannerWithAction
+                        tone="green"
+                        message="Your claim was approved — chat is open"
+                        action={(
+                          <Link to={`/messages/${pathCConversationId}`} className="item-btn-inline">
+                            Open Chat
+                          </Link>
+                        )}
+                      />
+                    ) : (
+                      <ItemBanner tone="green">Your claim was approved — chat is open</ItemBanner>
+                    )
                   )}
                   {pathCStatus === 'exhausted' && (
-                    <p className="text-sm text-center text-slate-600 dark:text-slate-400 py-3 px-4
-                                  rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80
-                                  dark:border-slate-700/50">
+                    <ItemBanner tone="slate">
                       You have reached the maximum number of attempts for this item
-                    </p>
+                    </ItemBanner>
                   )}
                   {!lostOwnerViewingMatchedFound && !pathCStatus && !pathBStatus && !foundOwnerMatchedOnLost
                     && isClaimable && !isLost && (
                     <button
                       onClick={() => handleClaimAction('c')}
-                      className="btn-primary w-full py-3 text-sm font-semibold inline-flex items-center justify-center gap-2"
+                      className="btn-primary item-action-btn inline-flex items-center justify-center gap-2"
                     >
                       <ScanSearch className="w-4 h-4 shrink-0" aria-hidden />
                       This Might Be Mine
@@ -628,7 +623,7 @@ export default function ItemDetailPage() {
                   )}
                   {!lostOwnerViewingMatchedFound && !pathCStatus && !pathBStatus && !foundOwnerMatchedOnLost
                     && !isClaimable && item && (
-                    <p className="text-xs text-center text-slate-400 dark:text-slate-500 py-2">
+                    <p className="text-xs text-center text-slate-400 dark:text-slate-500 py-1">
                       This item is currently {formatStatus(displayStatus)} and cannot accept new claims.
                     </p>
                   )}
@@ -639,8 +634,7 @@ export default function ItemDetailPage() {
                         if (!isAuthenticated) navigate('/login', { state: { from: `/items/${itemId}` } })
                         else setReportOpen(true)
                       }}
-                      className="text-xs text-slate-400 hover:text-red-500 dark:hover:text-red-400
-                                 transition-colors text-center py-1 inline-flex items-center justify-center gap-1 w-full"
+                      className="item-report-link w-full"
                     >
                       <Flag className="w-3.5 h-3.5 shrink-0" aria-hidden />
                       Flag / Report this post
@@ -651,30 +645,26 @@ export default function ItemDetailPage() {
 
               {/* Return confirmation — both match parties (Section 15) */}
               {isAuthenticated && verifiedReturnMatch && item?.status !== 'returned' && (
-                <div className="flex flex-col gap-2">
+                <div className="item-action-stack">
                   {returnStatus?.awaiting_owner_receipt && (
-                    <p className="text-sm text-center text-amber-700 dark:text-amber-300 py-3 px-4
-                                  rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200/80
-                                  dark:border-amber-800/50">
+                    <ItemBanner tone="amber">
                       The finder handed over your item. Please confirm you received it.
-                    </p>
+                    </ItemBanner>
                   )}
                   {returnStatus?.awaiting_finder_handover && returnStatus?.viewer_role === 'found_owner' && (
-                    <p className="text-sm text-center text-slate-600 dark:text-slate-400 py-3 px-4
-                                  rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80
-                                  dark:border-slate-700/50">
+                    <ItemBanner tone="slate">
                       The owner confirmed receipt. Confirm when you have handed over the item.
-                    </p>
+                    </ItemBanner>
                   )}
                   {returnStatus?.finder_handed_over && returnStatus?.viewer_role === 'found_owner'
                     && !returnStatus?.is_complete && (
-                    <p className="text-sm text-center text-slate-500 dark:text-slate-400 py-2">
+                    <p className="text-xs text-center text-slate-500 dark:text-slate-400 py-1">
                       Waiting for the owner to confirm receipt.
                     </p>
                   )}
                   <Link
                     to={`/returns/confirm/${verifiedReturnMatch.id}`}
-                    className="btn-primary w-full py-3 text-sm font-semibold text-center"
+                    className="btn-primary item-action-btn text-center"
                   >
                     <span className="inline-flex items-center justify-center gap-2">
                       <Hand className="w-4 h-4 shrink-0" aria-hidden />
@@ -686,69 +676,89 @@ export default function ItemDetailPage() {
 
               {/* Owner actions */}
               {isOwner && (
-                <div className="flex flex-col gap-2">
+                <div className="item-action-stack">
                   {matchNeedsVerification(ownerMatch) && (
                     <Link
                       to={`/verify-ownership/${ownerMatch.id}`}
-                      className="btn-primary w-full py-3 text-sm font-semibold text-center"
+                      className="btn-primary item-action-btn text-center"
                     >
                       Verify Ownership
                     </Link>
                   )}
                   {isLost && ownerMatch?.status === 'pending_review' && (
-                    <p className="text-sm text-center text-amber-700 dark:text-amber-300 py-3 px-4
-                                  rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200/80
-                                  dark:border-amber-800/50">
+                    <ItemBanner tone="amber">
                       Your claim on a matched found item is currently under admin review.
-                    </p>
+                    </ItemBanner>
                   )}
                   {!isLost && matchAsFoundOwnerOnFound?.status === 'pending_review' && (
-                    <p className="text-sm text-center text-amber-700 dark:text-amber-300 py-3 px-4
-                                  rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200/80
-                                  dark:border-amber-800/50">
+                    <ItemBanner tone="amber">
                       Admin is currently reviewing an ownership claim for this item.
-                    </p>
+                    </ItemBanner>
                   )}
                   {item.status === 'returned' && (
                     <Link
                       to="/dashboard?tab=returned"
-                      className="btn-secondary w-full py-3 text-sm font-semibold text-center"
+                      className="btn-secondary item-action-btn text-center"
                     >
                       View in Returned
                     </Link>
                   )}
-                  {matchVerificationComplete(ownerMatch) && ownerMatch.conversation_id && (
-                    <Link
-                      to={`/messages/${ownerMatch.conversation_id}`}
-                      className="btn-secondary w-full py-3 text-sm font-semibold text-center"
-                    >
-                      Open Chat
-                    </Link>
-                  )}
-                  {item.extensions_used < 2 && days > 0 && days <= 7 && (
-                    <button
-                      onClick={() => extendMutation.mutate(itemId)}
-                      disabled={extendMutation.isPending}
-                      className="btn-secondary w-full py-2.5 text-sm"
-                    >
-                      {extendMutation.isPending ? 'Extending…' : (
-                        <span className="inline-flex items-center justify-center gap-2">
-                          <Clock className="w-4 h-4 shrink-0" aria-hidden />
-                          Extend Post (+30 days)
-                        </span>
+                  {matchVerificationComplete(ownerMatch) && ownerMatch.conversation_id
+                    && item.extensions_used < 2 && days > 0 && days <= 7 ? (
+                    <div className="item-action-row">
+                      <Link
+                        to={`/messages/${ownerMatch.conversation_id}`}
+                        className="btn-secondary item-action-btn text-center"
+                      >
+                        Open Chat
+                      </Link>
+                      <button
+                        onClick={() => extendMutation.mutate(itemId)}
+                        disabled={extendMutation.isPending}
+                        className="btn-secondary item-action-btn"
+                      >
+                        {extendMutation.isPending ? 'Extending…' : (
+                          <span className="inline-flex items-center justify-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                            Extend (+30d)
+                          </span>
+                        )}
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      {matchVerificationComplete(ownerMatch) && ownerMatch.conversation_id && (
+                        <Link
+                          to={`/messages/${ownerMatch.conversation_id}`}
+                          className="btn-secondary item-action-btn text-center"
+                        >
+                          Open Chat
+                        </Link>
                       )}
-                    </button>
+                      {item.extensions_used < 2 && days > 0 && days <= 7 && (
+                        <button
+                          onClick={() => extendMutation.mutate(itemId)}
+                          disabled={extendMutation.isPending}
+                          className="btn-secondary item-action-btn"
+                        >
+                          {extendMutation.isPending ? 'Extending…' : (
+                            <span className="inline-flex items-center justify-center gap-1.5">
+                              <Clock className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                              Extend Post (+30 days)
+                            </span>
+                          )}
+                        </button>
+                      )}
+                    </>
                   )}
                   <button
                     onClick={handleDelete}
                     disabled={deleteMutation.isPending}
-                    className="w-full py-2.5 text-sm rounded-xl border border-red-200 text-red-600
-                               hover:bg-red-50 dark:border-red-800 dark:text-red-400
-                               dark:hover:bg-red-900/20 transition-colors disabled:opacity-50"
+                    className="item-btn-danger"
                   >
                     {deleteMutation.isPending ? 'Removing…' : (
-                      <span className="inline-flex items-center justify-center gap-2">
-                        <Trash2 className="w-4 h-4 shrink-0" aria-hidden />
+                      <span className="inline-flex items-center justify-center gap-1.5">
+                        <Trash2 className="w-3.5 h-3.5 shrink-0" aria-hidden />
                         Remove Post
                       </span>
                     )}

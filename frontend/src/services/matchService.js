@@ -28,6 +28,16 @@ export async function markAllNotificationsRead() {
   return res.data
 }
 
+export async function deleteNotification(notificationId) {
+  const res = await api.delete(`/notifications/${notificationId}`)
+  return res.data
+}
+
+export async function clearDeletableNotifications() {
+  const res = await api.post('/notifications/me/clear-deletable')
+  return res.data
+}
+
 export async function getUnreadNotificationCount() {
   const res = await api.get('/notifications/me', { params: { limit: 1 } })
   return res.data.unread_count ?? 0

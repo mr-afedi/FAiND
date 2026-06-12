@@ -55,7 +55,7 @@ function Checkbox({ checked, onChange, children }) {
 }
 
 export default function BrowsePage({ defaultType }) {
-  const { isAuthenticated, user } = useAuth()
+  const { isAuthenticated, authReady, user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
 
   // ── Filter state ────────────────────────────────────────────────────────────
@@ -106,13 +106,14 @@ export default function BrowsePage({ defaultType }) {
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ['browse', defaultType, isAuthenticated, queryParams],
     queryFn: () => browseItems(queryParams),
+    enabled: authReady,
     keepPreviousData: true,
   })
 
   const { data: matchData } = useQuery({
     queryKey: ['my-matches'],
     queryFn: getMyMatches,
-    enabled: isAuthenticated,
+    enabled: isAuthenticated && authReady,
   })
 
   // ── Accumulated items for Load More ─────────────────────────────────────────

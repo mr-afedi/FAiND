@@ -37,6 +37,11 @@ export async function getAnalytics() {
   return data
 }
 
+export async function adminSearch(q) {
+  const { data } = await api.get('/admin/search', { ...adminConfig(), params: { q } })
+  return data
+}
+
 export async function listUsers(params = {}) {
   const { data } = await api.get('/admin/users', { ...adminConfig(), params })
   return data
@@ -56,8 +61,35 @@ export async function unsuspendUser(userId) {
   return data
 }
 
-export async function listClaims() {
-  const { data } = await api.get('/admin/claims', adminConfig())
+export async function trustAdjustUser(userId, delta, reason) {
+  const { data } = await api.post(
+    `/admin/users/${userId}/trust-adjust`,
+    { delta, reason },
+    adminConfig(),
+  )
+  return data
+}
+
+export async function lockDisputeItem(disputeId, reason, disputeType) {
+  const { data } = await api.post(
+    `/admin/disputes/${disputeId}/lock-item`,
+    { reason },
+    { ...adminConfig(), params: disputeType ? { dispute_type: disputeType } : undefined },
+  )
+  return data
+}
+
+export async function escalateDispute(disputeId, note, disputeType) {
+  const { data } = await api.post(
+    `/admin/disputes/${disputeId}/escalate`,
+    { note },
+    { ...adminConfig(), params: disputeType ? { dispute_type: disputeType } : undefined },
+  )
+  return data
+}
+
+export async function listClaims(params = {}) {
+  const { data } = await api.get('/admin/claims', { ...adminConfig(), params })
   return data
 }
 
@@ -189,6 +221,30 @@ export async function allowVerification(userId) {
 export async function getFraudDetail(userId) {
   const { data } = await api.get(`/admin/fraud/${userId}/detail`, adminConfig())
   return data.detail
+}
+
+export async function listReturnedItems(params = {}) {
+  const { data } = await api.get('/admin/returns', { ...adminConfig(), params })
+  return data
+}
+
+export async function getReturnedDetail(returnId) {
+  const { data } = await api.get(`/admin/returns/${returnId}`, adminConfig())
+  return data.detail
+}
+
+export async function openReturnDispute(returnId, reason) {
+  const { data } = await api.post(
+    `/admin/returns/${returnId}/open-dispute`,
+    { reason },
+    adminConfig(),
+  )
+  return data
+}
+
+export async function listUniversities() {
+  const { data } = await api.get('/universities/')
+  return data
 }
 
 export async function listPostsModeration(params = {}) {

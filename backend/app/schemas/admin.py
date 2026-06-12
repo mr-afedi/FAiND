@@ -24,6 +24,19 @@ class PlatformAnalytics(BaseModel):
     active_users_7d: int
     active_users_30d: int
     trust_distribution: dict[str, int]
+    lost_items_this_week: int = 0
+    found_items_this_week: int = 0
+    returned_this_week: int = 0
+    avg_days_post_to_return: Optional[float] = None
+    claims_path_a: int = 0
+    claims_path_b: int = 0
+    claims_path_c: int = 0
+    disputes_opened_total: int = 0
+    disputes_resolved_total: int = 0
+    active_users_daily: int = 0
+    active_users_weekly: int = 0
+    active_users_monthly: int = 0
+    fraud_events_this_week: int = 0
 
 
 class AdminUserListItem(BaseModel):
@@ -53,15 +66,19 @@ class ClaimQueueItem(BaseModel):
     created_at: datetime
     claimant_id: Optional[uuid.UUID] = None
     claimant_name: str
+    claimant_trust_tier: str = ""
     lost_item_id: uuid.UUID
     found_item_id: uuid.UUID
     lost_description: str
     found_description: str
+    item_label: str = ""
+    university_id: Optional[uuid.UUID] = None
     score_breakdown: dict[str, Any] = Field(default_factory=dict)
 
 
 class ClaimsQueueResponse(BaseModel):
     claims: list[ClaimQueueItem]
+    total: int = 0
 
 
 class DisputeQueueItem(BaseModel):
@@ -94,6 +111,7 @@ class PostModerationItem(BaseModel):
     posted_by_id: uuid.UUID
     admin_locked: bool
     pending_reports: int
+    disputes_count: int = 0
     flagged: bool = False
     created_at: datetime
 
@@ -151,6 +169,72 @@ class ForceClosePostRequest(BaseModel):
 
 class RequestMoreInfoRequest(BaseModel):
     note: str = Field(..., min_length=10, max_length=2000)
+
+
+class TrustAdjustRequest(BaseModel):
+    delta: int = Field(..., ge=-100, le=100)
+    reason: str = Field(..., min_length=10, max_length=500)
+
+
+class LockDisputeItemRequest(BaseModel):
+    reason: str = Field(..., min_length=10, max_length=500)
+
+
+class EscalateDisputeRequest(BaseModel):
+    note: str = Field(..., min_length=10, max_length=2000)
+
+
+class AdminSearchUserHit(BaseModel):
+    id: uuid.UUID
+    username: str
+    email: str
+    full_name: str
+
+
+class AdminSearchItemHit(BaseModel):
+    id: uuid.UUID
+    item_type: str
+    public_description: str
+    status: str
+
+
+class AdminSearchClaimHit(BaseModel):
+    match_id: uuid.UUID
+    path: str
+    claimant_name: str
+    match_score: float
+    status: str
+
+
+class AdminSearchResponse(BaseModel):
+    query: str
+    users: list[AdminSearchUserHit] = Field(default_factory=list)
+    items: list[AdminSearchItemHit] = Field(default_factory=list)
+    claims: list[AdminSearchClaimHit] = Field(default_factory=list)
+
+
+class ReturnedItemListItem(BaseModel):
+    return_id: uuid.UUID
+    item_description: str
+    category: str
+    owner_name: str
+    owner_username: str
+    finder_name: str
+    finder_username: str
+    date_lost: datetime
+    date_found: datetime
+    date_returned: datetime
+    tipped: bool
+    university_id: uuid.UUID
+
+
+class ReturnedItemsResponse(BaseModel):
+    items: list[ReturnedItemListItem]
+    total: int
+
+
+class OpenReturnDisputeRequest(BaseModel):
+    reason: str = Field(..., min_length=10, max_length=2000)
 
 
 class AdminDetailResponse(BaseModel):

@@ -49,11 +49,8 @@ export default defineConfig({
       injectManifest: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
       },
-      // Register the service worker in dev mode so push subscriptions work
-      // during development (not just in production builds).
       devOptions: {
-        enabled: true,
-        type: 'module',
+        enabled: false,
       },
     }),
   ],
@@ -86,11 +83,26 @@ export default defineConfig({
     },
   },
   server: {
+    host: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         ws: true,
+        cookieDomainRewrite: '',
+        cookiePathRewrite: { '*': '/' },
+      },
+    },
+  },
+  preview: {
+    host: true,
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        ws: true,
+        cookieDomainRewrite: '',
+        cookiePathRewrite: { '*': '/' },
       },
     },
   },

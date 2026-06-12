@@ -26,8 +26,20 @@ export function useCampusZones() {
   return { zones, zonesLoading, ...query }
 }
 
+function generateQuestionId() {
+  // randomUUID requires a secure context (HTTPS/localhost). LAN HTTP on phones is not secure.
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    try {
+      return crypto.randomUUID()
+    } catch {
+      /* insecure context — use fallback */
+    }
+  }
+  return `q-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+}
+
 function newQuestion() {
-  return { id: crypto.randomUUID(), question: '', answer: '' }
+  return { id: generateQuestionId(), question: '', answer: '' }
 }
 
 export function createInitialQuestions(count = 2) {

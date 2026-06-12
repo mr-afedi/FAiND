@@ -536,6 +536,7 @@ def extend_lost_item(
 
     item.expiry_date = item.expiry_date + timedelta(days=30)
     item.extensions_used += 1
+    item.expiry_reminder_sent_at = None
     db.commit()
     db.refresh(item)
 
@@ -770,6 +771,7 @@ def extend_found_item(
 
     item.expiry_date = item.expiry_date + timedelta(days=30)
     item.extensions_used += 1
+    item.expiry_reminder_sent_at = None
     db.commit()
 
     item = (
@@ -827,6 +829,7 @@ def _build_browse_card(
     viewer_matched_ids: Optional[set] = None,
     path_b_viewer: Optional[tuple[str | None, uuid.UUID | None]] = None,
     path_c_viewer: Optional[tuple[str | None, uuid.UUID | None]] = None,
+    chat_unlocked_ids: Optional[set] = None,
 ) -> BrowseItemCard:
     poster = BrowseItemPoster(
         id=item.posted_by.id,
@@ -871,6 +874,7 @@ def _build_browse_card(
         viewer_path_b_conversation_id=pb_conv if item.item_type == ItemType.LOST else None,
         viewer_path_c_status=pc_status if item.item_type == ItemType.FOUND else None,
         viewer_path_c_conversation_id=pc_conv if item.item_type == ItemType.FOUND else None,
+        viewer_chat_unlocked=bool(chat_unlocked_ids and item.id in chat_unlocked_ids),
     )
 
 
@@ -888,6 +892,7 @@ def browse_items(
     limit: int = 20,
     viewer_matched_ids: Optional[set] = None,
     viewer_id: Optional[uuid.UUID] = None,
+    chat_unlocked_ids: Optional[set] = None,
 ) -> BrowseListResponse:
     """
     Public browse feed — no auth required.
@@ -941,6 +946,7 @@ def browse_items(
                 viewer_matched_ids,
                 path_b_map.get(i.id),
                 path_c_map.get(i.id),
+                chat_unlocked_ids,
             )
             for i in items
         ],
@@ -991,7 +997,10 @@ def get_homepage_data(
 
     path_b_map: dict[uuid.UUID, tuple[str | None, uuid.UUID | None]] = {}
     path_c_map: dict[uuid.UUID, tuple[str | None, uuid.UUID | None]] = {}
+    chat_unlocked_ids: set[uuid.UUID] = set()
     if viewer_id:
+        from app.services.matching_service import get_chat_unlocked_item_ids
+
         lost_ids = [i.id for i in latest_lost if i.posted_by_id != viewer_id]
         found_ids = [i.id for i in latest_found if i.posted_by_id != viewer_id]
         path_b_map = path_b_service.resolve_viewer_path_b_statuses_batch(
@@ -1000,14 +1009,19 @@ def get_homepage_data(
         path_c_map = path_c_service.resolve_viewer_path_c_statuses_batch(
             db, viewer_id, found_ids
         )
+        chat_unlocked_ids = get_chat_unlocked_item_ids(db, viewer_id)
 
     return HomepageResponse(
         latest_lost=[
-            _build_browse_card(i, viewer_matched_ids, path_b_map.get(i.id))
+            _build_browse_card(
+                i, viewer_matched_ids, path_b_map.get(i.id), None, chat_unlocked_ids,
+            )
             for i in latest_lost
         ],
         latest_found=[
-            _build_browse_card(i, viewer_matched_ids, None, path_c_map.get(i.id))
+            _build_browse_card(
+                i, viewer_matched_ids, None, path_c_map.get(i.id), chat_unlocked_ids,
+            )
             for i in latest_found
         ],
         recently_returned_count=recently_returned_count,
@@ -1054,6 +1068,7 @@ def list_public_returned_items(
             item_name=_public_returned_item_name(item),
             returned_at=record.returned_at,
             university_short_name=university.short_name,
+            finder_tipped=record.appreciation_sent_at is not None,
         )
         for record, item, university in rows
     ]

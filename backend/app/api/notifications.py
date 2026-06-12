@@ -3,7 +3,7 @@ In-app notifications API (Feature G — bell wiring in Feature H).
 """
 import uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
@@ -24,6 +24,7 @@ class NotificationResponse(BaseModel):
     link: str | None
     reference_id: uuid.UUID | None
     read: bool
+    deletable: bool
     created_at: str
 
     model_config = {"from_attributes": True}
@@ -53,6 +54,7 @@ def get_my_notifications(
                 link=n.link,
                 reference_id=n.reference_id,
                 read=n.read,
+                deletable=notification_service.is_notification_deletable(n),
                 created_at=n.created_at.isoformat(),
             )
             for n in rows
@@ -89,3 +91,30 @@ def mark_all_notifications_read(
     ).update({"read": True})
     db.commit()
     return {"ok": True}
+
+
+@router.delete("/{notification_id}")
+def delete_notification(
+    notification_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Permanently delete a deletable notification (IDOR-safe)."""
+    deleted = notification_service.delete_notification(
+        db, current_user.id, notification_id
+    )
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return {"ok": True}
+
+
+@router.post("/me/clear-deletable")
+def clear_deletable_notifications(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Permanently delete all deletable notifications for the current user."""
+    deleted_count = notification_service.delete_deletable_notifications(
+        db, current_user.id
+    )
+    return {"ok": True, "deleted_count": deleted_count}

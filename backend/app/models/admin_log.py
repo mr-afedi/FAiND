@@ -28,6 +28,9 @@ class AdminActionType(str, PyEnum):
     ALLOW_VERIFICATION = "allow_verification"
     REQUEST_MORE_INFO = "request_more_info"
     TRUST_ADJUSTMENT = "trust_adjustment"
+    LOCK_ITEM = "lock_item"
+    ESCALATE_DISPUTE = "escalate_dispute"
+    OPEN_MANUAL_DISPUTE = "open_manual_dispute"
 
 
 class AdminLog(Base):

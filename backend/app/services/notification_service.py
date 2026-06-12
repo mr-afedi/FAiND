@@ -9,6 +9,7 @@ import logging
 import threading
 import uuid
 
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.models.notification import Notification, NotificationType
@@ -700,6 +701,117 @@ def notify_fraud_alert(
     )
     db.flush()
     _fire_push(db, admin_id, "FAiND", body, link)
+
+
+_NON_DELETABLE_TYPES = frozenset({
+    NotificationType.MATCH_FOUND,
+    NotificationType.POTENTIAL_MATCH_EXPIRED,
+    NotificationType.VERIFICATION_PASSED,
+    NotificationType.VERIFICATION_FAILED,
+    NotificationType.VERIFICATION_REVIEW,
+    NotificationType.CLAIM_RECEIVED,
+    NotificationType.POST_EXPIRING,
+    NotificationType.ACCOUNT_SUSPENDED,
+})
+
+_DELETABLE_TYPES = frozenset({
+    NotificationType.ITEM_RETURNED,
+    NotificationType.ACCOUNT_UNSUSPENDED,
+})
+
+# GENERAL notifications — title substring rules (lowercased)
+_NON_DELETABLE_GENERAL_SUBSTRINGS = (
+    "confirm item receipt",
+    "confirm your item receipt",
+    "return dispute",
+    "return disputed",
+    "dispute resolved",
+    "new chat message",
+    "new message",
+    "conversation paused",
+    "claim under review",
+    "claim not approved",
+    "chat unlocked",
+    "verification passed",
+    "verification failed",
+    "verification under review",
+    "potential match",
+    "match found",
+    "post expiring",
+    "account suspended",
+    "community guidelines",
+    "report reviewed",
+    "appreciation sent",
+)
+
+_DELETABLE_GENERAL_SUBSTRINGS = (
+    "appreciation received",
+    "post extended",
+    "post removed",
+    "new lost item",
+    "lost item posted",
+    "lost item nearby",
+    "civic alert",
+)
+
+
+def is_notification_deletable(notification: Notification) -> bool:
+    """Whether the user may permanently delete this notification."""
+    t = notification.notification_type
+    if t in _NON_DELETABLE_TYPES:
+        return False
+    if t in _DELETABLE_TYPES:
+        return True
+    if t != NotificationType.GENERAL:
+        return False
+    title = (notification.title or "").strip().lower()
+    for sub in _NON_DELETABLE_GENERAL_SUBSTRINGS:
+        if sub in title:
+            return False
+    for sub in _DELETABLE_GENERAL_SUBSTRINGS:
+        if sub in title:
+            return True
+    return False
+
+
+def delete_notification(
+    db: Session,
+    user_id: uuid.UUID,
+    notification_id: uuid.UUID,
+) -> bool:
+    """Permanently delete one deletable notification. Returns False if not found."""
+    notif = (
+        db.query(Notification)
+        .filter(Notification.id == notification_id, Notification.user_id == user_id)
+        .first()
+    )
+    if not notif:
+        return False
+    if not is_notification_deletable(notif):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This notification cannot be deleted.",
+        )
+    db.delete(notif)
+    db.commit()
+    return True
+
+
+def delete_deletable_notifications(db: Session, user_id: uuid.UUID) -> int:
+    """Permanently delete all deletable notifications for the user."""
+    rows = (
+        db.query(Notification)
+        .filter(Notification.user_id == user_id)
+        .all()
+    )
+    deleted = 0
+    for notif in rows:
+        if is_notification_deletable(notif):
+            db.delete(notif)
+            deleted += 1
+    if deleted:
+        db.commit()
+    return deleted
 
 
 def get_unread_count(db: Session, user_id: uuid.UUID) -> int:

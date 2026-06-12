@@ -17,7 +17,7 @@ function wsUrl(conversationId) {
 }
 
 export function useInboxChatSockets() {
-  const { isAuthenticated, user } = useAuth()
+  const { isAuthenticated, authReady, user } = useAuth()
   const queryClient = useQueryClient()
   const location = useLocation()
   const socketsRef = useRef(new Map())
@@ -25,7 +25,7 @@ export function useInboxChatSockets() {
   const { data: inbox } = useQuery({
     queryKey: ['conversations'],
     queryFn: listConversations,
-    enabled: isAuthenticated,
+    enabled: isAuthenticated && authReady,
     staleTime: 60_000,
   })
 

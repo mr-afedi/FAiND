@@ -54,8 +54,11 @@ export default function LoginPage() {
       sessionStorage.removeItem('faind_login_redirect')
       navigate(from, { replace: true })
     } catch (err) {
-      const detail = err.response?.data?.detail || 'Login failed. Please try again.'
-      const status  = err.response?.status
+      const status = err.response?.status
+      const detail = err.response?.data?.detail
+        || (err.code === 'ERR_NETWORK'
+          ? 'Cannot reach the server. Make sure the backend is running (uvicorn on port 8000).'
+          : 'Login failed. Please try again.')
 
       if (status === 403 && detail.toLowerCase().includes('verify')) {
         // Account exists but email not verified — send them straight to verify page
