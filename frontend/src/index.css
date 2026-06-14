@@ -31,6 +31,17 @@
     @apply box-border;
   }
 
+  @media (max-width: 767px) {
+    html,
+    body {
+      overflow-x: hidden;
+    }
+
+    body.mobile-bottom-nav {
+      padding-bottom: calc(3.5rem + env(safe-area-inset-bottom, 0px));
+    }
+  }
+
   /* Custom scrollbar */
   ::-webkit-scrollbar {
     @apply w-1.5;
@@ -309,5 +320,37 @@
   .item-report-link {
     @apply text-xs text-slate-400 hover:text-red-500 dark:hover:text-red-400
            transition-colors inline-flex items-center justify-center gap-1 py-0.5;
+  }
+
+  /* ── Mobile-only utilities (max-width 768px) — desktop unchanged ── */
+  @media (max-width: 767px) {
+    .page-container {
+      @apply px-4;
+    }
+
+    .mobile-section {
+      @apply py-5;
+    }
+
+    .mobile-form-submit {
+      @apply w-full min-h-[44px];
+    }
+
+    .mobile-tap-target {
+      @apply min-h-[44px];
+    }
+
+    .stat-card {
+      @apply p-3;
+    }
+
+    .auth-card {
+      @apply p-5;
+    }
+
+    .btn-primary,
+    .btn-secondary {
+      @apply min-h-[44px];
+    }
   }
 }

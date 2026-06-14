@@ -40,21 +40,22 @@ export default function ItemCard({ item, viewerBadge = null }) {
   return (
     <Link
       to={`/items/${item.id}`}
-      className="group flex h-full flex-col rounded-2xl overflow-hidden border border-slate-200/70
+      className="group flex h-full max-md:flex-row flex-col rounded-2xl max-md:rounded-xl overflow-hidden border border-slate-200/70
                  dark:border-slate-700/50 bg-white dark:bg-slate-800/60
-                 hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200"
+                 hover:shadow-lg hover:-translate-y-0.5 max-md:hover:translate-y-0 transition-all duration-200"
     >
-      {/* Image — flex-shrink-0 so grid row stretch never compresses the photo area */}
-      <div className="relative w-full flex-shrink-0 aspect-[4/3] bg-slate-100 dark:bg-slate-700 overflow-hidden">
+      {/* Image — fixed thumbnail on mobile */}
+      <div className="relative w-full flex-shrink-0 aspect-[4/3] max-md:w-[5.5rem] max-md:h-[5rem] max-md:aspect-auto
+                      bg-slate-100 dark:bg-slate-700 overflow-hidden">
         {item.image_urls?.[0] ? (
           <img
             src={item.image_urls[0]}
             alt={cat.label}
-            className="w-full h-full object-contain"
+            className="w-full h-full object-cover max-md:object-cover"
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-slate-400">
-            <CategoryIcon category={item.category} className="w-14 h-14" />
+            <CategoryIcon category={item.category} className="w-14 h-14 max-md:w-8 max-md:h-8" />
           </div>
         )}
         {/* Item type badge top-left */}
@@ -73,8 +74,8 @@ export default function ItemCard({ item, viewerBadge = null }) {
         )}
       </div>
 
-      {/* Body — natural height; mt-auto absorbs extra space when grid rows are equalized */}
-      <div className="mt-auto flex flex-col gap-2 p-3">
+      {/* Body */}
+      <div className="mt-auto max-md:mt-0 flex flex-col gap-2 max-md:gap-1 flex-1 min-w-0 p-3 max-md:py-2 max-md:pr-3 max-md:pl-2.5">
         {/* Category + status */}
         <div className="flex flex-wrap items-center gap-1.5">
           <CategoryLabel
@@ -93,12 +94,12 @@ export default function ItemCard({ item, viewerBadge = null }) {
         </div>
 
         {/* Description preview */}
-        <p className="text-sm text-slate-700 dark:text-slate-300 line-clamp-2 leading-snug">
+        <p className="text-sm max-md:text-xs text-slate-700 dark:text-slate-300 line-clamp-2 max-md:line-clamp-1 leading-snug">
           {item.public_description}
         </p>
 
         {/* Location + time */}
-        <div className="flex items-center justify-between text-xs text-slate-400 dark:text-slate-500">
+        <div className="flex items-center justify-between text-xs max-md:text-[10px] text-slate-400 dark:text-slate-500">
           <span className="truncate max-w-[60%] inline-flex items-center gap-1">
             <MapPin className="w-3 h-3 shrink-0" aria-hidden />
             {item.location_label}
@@ -106,8 +107,8 @@ export default function ItemCard({ item, viewerBadge = null }) {
           <span className="flex-shrink-0">{timeAgo(item.created_at)}</span>
         </div>
 
-        {/* Poster */}
-        <div className="flex items-center gap-1.5 pt-1 border-t border-slate-100 dark:border-slate-700/60">
+        {/* Poster — hidden on mobile to save height */}
+        <div className="hidden md:flex items-center gap-1.5 pt-1 border-t border-slate-100 dark:border-slate-700/60">
           <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${TIER_PILL[tier] ?? TIER_PILL['New Member']}`}>
             {tier}
           </span>

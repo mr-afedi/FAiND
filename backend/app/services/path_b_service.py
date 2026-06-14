@@ -618,8 +618,7 @@ def submit_path_b(
             )
         else:
             match.status = PotentialMatchStatus.VERIFIED
-            if lost_item.status == ItemStatus.OPEN:
-                lost_item.status = ItemStatus.POTENTIAL_MATCH
+            # Path B must not move the lost post to POTENTIAL_MATCH — that status is Path A only.
 
             conv = Conversation(
                 university_id=user.university_id,

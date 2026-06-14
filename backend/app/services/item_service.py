@@ -363,13 +363,21 @@ def get_item_detail(
     )
 
     if is_owner:
-        # Found items stay "found" in the DB even when matched — show the real
-        # match status to the owner so they know a match exists.
+        # Found items stay "found" in the DB even when matched — show Path A match
+        # status to the owner. Lost posts stay OPEN for Path B/C (potential_match is Path A only).
         override = (
             ItemStatus.POTENTIAL_MATCH
-            if active_match and current_user.id in party_ids
+            if active_match
+            and current_user.id in party_ids
+            and matching_service.is_ai_potential_match(active_match)
             else None
         )
+        if (
+            item.item_type == ItemType.LOST
+            and item.status == ItemStatus.POTENTIAL_MATCH
+            and override is None
+        ):
+            override = ItemStatus.OPEN
         return _build_owner_response(item, db, override_status=override)
 
     # Non-owner: party members always see POTENTIAL_MATCH badge (even on found items

@@ -270,7 +270,7 @@ export default function IHaveThisItemPage() {
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       <NavBar />
-      <div className="page-container py-8 max-w-2xl">
+      <div className="page-container py-8 max-md:py-5 max-w-2xl overflow-x-hidden">
         <Link
           to={backLink}
           className="text-sm text-slate-500 hover:text-brand-600 dark:hover:text-brand-400 mb-4 inline-block"
@@ -358,11 +358,11 @@ export default function IHaveThisItemPage() {
               : `${form.attempts_remaining} of ${form.max_attempts} attempts remaining for this item.`}
           </p>
 
-          <div className="flex gap-3 pt-2">
+          <div className="flex flex-col max-md:gap-2 sm:flex-row gap-3 pt-2">
             <SubmitButton
               loading={isSubmitting || submitMutation.isPending}
               disabled={form.attempts_remaining === 0 || form.attempt_counter_paused}
-              className="btn-primary flex-1 py-3 text-sm font-semibold disabled:opacity-50"
+              className="btn-primary flex-1 py-3 text-sm font-semibold disabled:opacity-50 mobile-form-submit"
               loadingLabel="Submitting…"
             >
               Submit Claim
@@ -370,7 +370,7 @@ export default function IHaveThisItemPage() {
             <button
               type="button"
               onClick={() => navigate(backLink)}
-              className="btn-secondary px-6 py-3 text-sm"
+              className="btn-secondary px-6 py-3 text-sm max-md:w-full mobile-form-submit"
             >
               Cancel
             </button>

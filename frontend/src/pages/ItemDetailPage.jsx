@@ -250,14 +250,19 @@ export default function ItemDetailPage() {
 
   const lostOwnerViewingMatchedFound = Boolean(matchAsLostOwnerOnFound)
   const MASKED_PUBLIC_STATUSES = ['potential_match', 'under_verification', 'under_dispute']
+  const ownerLostStatus = item && isOwner && isLost && item.status === 'potential_match' && !ownerMatch
+    ? 'open'
+    : item?.status
   const displayStatus = item && (
-    !isOwner && MASKED_PUBLIC_STATUSES.includes(item.status)
-      ? (isLost ? 'open' : 'found')
-      : item.status
+    isOwner
+      ? ownerLostStatus
+      : !isOwner && MASKED_PUBLIC_STATUSES.includes(item.status)
+        ? (isLost ? 'open' : 'found')
+        : item.status
   )
   const showStatusBadge = item && (
     isOwner
-      ? STATUS_PILL[item.status]
+      ? STATUS_PILL[displayStatus]
       : !MASKED_PUBLIC_STATUSES.includes(item.status) && STATUS_PILL[displayStatus]
   )
 
@@ -332,7 +337,7 @@ export default function ItemDetailPage() {
         />
       )}
 
-      <div className="page-container py-8 max-w-4xl">
+      <div className="page-container py-8 max-md:py-5 max-w-4xl overflow-x-hidden">
         {/* ── Breadcrumb ── */}
         <div className="flex items-center gap-2 mb-6 text-sm text-slate-500 dark:text-slate-400">
           <Link to={backTo} className="inline-flex items-center gap-1 hover:text-brand-600 dark:hover:text-brand-400 transition-colors">
@@ -346,13 +351,13 @@ export default function ItemDetailPage() {
           </span>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 max-md:gap-4">
           {/* ── Left: images ── */}
-          <div className="lg:col-span-2 flex flex-col gap-3">
+          <div className="lg:col-span-2 flex flex-col gap-3 max-md:gap-2">
             {item.image_urls?.length > 0 ? (
               <>
                 <div
-                  className="w-full aspect-square rounded-2xl overflow-hidden bg-slate-100
+                  className="w-full aspect-square max-md:aspect-[4/3] max-md:max-h-[220px] rounded-2xl max-md:rounded-xl overflow-hidden bg-slate-100
                              dark:bg-slate-800 cursor-zoom-in"
                   onClick={() => setLightboxIdx(0)}
                 >

@@ -192,16 +192,54 @@ export default function MessagesPage() {
 
   const showListOnMobile = !selectedId
   const showChatOnMobile = Boolean(selectedId)
+  const mobileChatOpen = showChatOnMobile
+
+  // Keep chat chrome visible when the mobile keyboard opens (visual viewport shrinks).
+  const [mobileShellHeight, setMobileShellHeight] = useState(null)
+
+  useEffect(() => {
+    if (!mobileChatOpen || typeof window === 'undefined') {
+      setMobileShellHeight(null)
+      return undefined
+    }
+
+    const vv = window.visualViewport
+    if (!vv) return undefined
+
+    function syncHeight() {
+      setMobileShellHeight(vv.height)
+    }
+
+    syncHeight()
+    vv.addEventListener('resize', syncHeight)
+    vv.addEventListener('scroll', syncHeight)
+    return () => {
+      vv.removeEventListener('resize', syncHeight)
+      vv.removeEventListener('scroll', syncHeight)
+    }
+  }, [mobileChatOpen])
 
   return (
-    <div className="h-screen bg-slate-50 dark:bg-slate-950 flex flex-col overflow-hidden">
+    <div
+      className={`bg-slate-50 dark:bg-slate-950 flex flex-col overflow-hidden
+                  ${mobileChatOpen ? 'max-md:fixed max-md:inset-x-0 max-md:top-0 max-md:z-30' : 'h-[100dvh] md:h-screen'}`}
+      style={mobileChatOpen && mobileShellHeight
+        ? { height: mobileShellHeight }
+        : mobileChatOpen
+          ? { height: '100dvh' }
+          : undefined}
+    >
       <NavBar />
-      <div className="page-container flex-1 flex flex-col min-h-0 py-4 max-w-6xl">
+      <div className={`flex-1 flex flex-col min-h-0 max-w-6xl w-full mx-auto overflow-hidden
+                       ${mobileChatOpen ? 'max-md:px-0 max-md:py-0' : 'page-container py-4 max-md:py-0'}`}>
         <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100 mb-4 hidden lg:block shrink-0">
           Messages
         </h1>
 
-        <div className="flex flex-1 min-h-0 gap-4 rounded-2xl overflow-hidden border border-slate-200/80 dark:border-slate-700/50 bg-white/80 dark:bg-slate-900/40 shadow-sm">
+        <div className={`flex flex-1 min-h-0 gap-4 max-md:gap-0 overflow-hidden
+                        ${mobileChatOpen
+                          ? 'max-md:rounded-none max-md:border-0 max-md:shadow-none max-md:bg-transparent'
+                          : 'rounded-2xl border border-slate-200/80 dark:border-slate-700/50 bg-white/80 dark:bg-slate-900/40 shadow-sm'}`}>
           {/* Inbox list */}
           <aside
             className={`flex flex-col min-h-0 w-full lg:w-80 lg:shrink-0 border-r border-slate-200/80 dark:border-slate-700/50 overflow-hidden
@@ -265,7 +303,8 @@ export default function MessagesPage() {
           {/* Chat panel */}
           <section
             className={`flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden
-                        ${showChatOnMobile ? 'flex' : 'hidden'} lg:flex`}
+                        ${showChatOnMobile ? 'flex' : 'hidden'} lg:flex
+                        ${mobileChatOpen ? 'max-md:bg-white max-md:dark:bg-slate-950' : ''}`}
           >
             {!selectedId && (
               <div className="flex-1 flex items-center justify-center text-slate-400 text-sm p-8">
@@ -275,7 +314,8 @@ export default function MessagesPage() {
 
             {selectedId && detail && (
               <>
-                <header className="flex items-center gap-2 p-3 border-b border-slate-200/80 dark:border-slate-700/50 shrink-0">
+                <header className="flex items-center gap-2 p-3 border-b border-slate-200/80 dark:border-slate-700/50 shrink-0
+                                       max-md:bg-white max-md:dark:bg-slate-950 max-md:relative max-md:z-10">
                   <button
                     type="button"
                     onClick={() => navigate('/messages')}
@@ -309,8 +349,11 @@ export default function MessagesPage() {
                   </button>
                 </header>
 
-                <div className="px-3 py-2 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200/60 dark:border-amber-800/40 shrink-0">
-                  <p className="text-xs text-amber-900 dark:text-amber-200 leading-relaxed">{SAFETY_TEXT}</p>
+                <div className="px-3 py-2 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200/60 dark:border-amber-800/40 shrink-0
+                                max-md:relative max-md:z-10">
+                  <p className="text-xs text-amber-900 dark:text-amber-200 leading-relaxed max-md:line-clamp-2">
+                    {SAFETY_TEXT}
+                  </p>
                 </div>
 
                 <div
@@ -351,7 +394,9 @@ export default function MessagesPage() {
                 ) : (
                   <form
                     onSubmit={handleSend}
-                    className="p-3 border-t border-slate-200/80 dark:border-slate-700/50 flex gap-2 shrink-0"
+                    className="p-3 border-t border-slate-200/80 dark:border-slate-700/50 flex gap-2 shrink-0
+                               max-md:bg-white max-md:dark:bg-slate-950 max-md:relative max-md:z-10
+                               max-md:pb-[max(0.75rem,env(safe-area-inset-bottom))]"
                   >
                     <input
                       type="text"

@@ -35,6 +35,7 @@ import AdminDashboardPage  from './pages/AdminDashboardPage'
 import ProtectedRoute from './components/ProtectedRoute'
 import GuestRoute     from './components/GuestRoute'
 import NavBar         from './components/NavBar'
+import BottomNav      from './components/BottomNav'
 
 function NotFoundPage() {
   return (
@@ -62,6 +63,7 @@ export default function App() {
       <PushPromptTrigger />
       <PushPromptBanner />
       <ChatRealtimeBridge />
+      <BottomNav />
       <Routes>
         {/* Public */}
         <Route path="/" element={<HomePage />} />

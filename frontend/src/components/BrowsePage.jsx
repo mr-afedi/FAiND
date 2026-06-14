@@ -168,20 +168,20 @@ export default function BrowsePage({ defaultType }) {
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 transition-colors duration-200">
       <NavBar />
 
-      <div className="page-container py-8 max-w-6xl">
+      <div className="page-container py-8 max-md:py-5 max-w-6xl">
         {/* ── Page header ── */}
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-            <TitleIcon className="w-6 h-6 text-brand-600 dark:text-brand-400" aria-hidden />
+        <div className="mb-6 max-md:mb-4">
+          <h1 className="text-2xl max-md:text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+            <TitleIcon className="w-6 h-6 max-md:w-5 max-md:h-5 text-brand-600 dark:text-brand-400" aria-hidden />
             {titleText}
           </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">{subtitle}</p>
+          <p className="text-sm max-md:text-xs text-slate-500 dark:text-slate-400 mt-1">{subtitle}</p>
         </div>
 
         {/* ── Search + filter controls ── */}
-        <div className="glass p-4 mb-6 rounded-2xl flex flex-col gap-3">
+        <div className="glass p-4 max-md:p-3 mb-6 max-md:mb-4 rounded-2xl flex flex-col gap-3 max-md:gap-2">
           {/* Search bar */}
-          <div className="flex items-center gap-3">
+          <div className="flex flex-col max-md:gap-2 sm:flex-row items-stretch sm:items-center gap-3">
             <div className="relative flex-1">
               <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"
                    fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -202,7 +202,7 @@ export default function BrowsePage({ defaultType }) {
             <select
               value={sort}
               onChange={(e) => setSort(e.target.value)}
-              className="input-field w-44 flex-shrink-0"
+              className="input-field w-44 max-md:w-full flex-shrink-0"
             >
               {SORT_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>{o.label}</option>
@@ -342,7 +342,7 @@ export default function BrowsePage({ defaultType }) {
             </p>
 
             {/* Card grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 max-md:gap-2.5">
               {allItems.map((item) => (
                 <ItemCard
                   key={item.id}

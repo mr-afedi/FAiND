@@ -329,9 +329,9 @@ export default function ReportLostPage() {
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       <NavBar />
 
-      <div className="max-w-2xl mx-auto px-4 py-10">
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
+      <div className="max-w-2xl mx-auto px-4 py-10 max-md:py-5 overflow-x-hidden">
+        <div className="mb-8 max-md:mb-5">
+          <h1 className="text-2xl max-md:text-xl font-bold text-slate-900 dark:text-white">
             Report a Lost Item
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
@@ -340,8 +340,8 @@ export default function ReportLostPage() {
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-7">
-          <div className="glass p-6 relative z-[1] overflow-visible">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-7 max-md:gap-5">
+          <div className="glass p-6 max-md:p-4 relative z-[1] overflow-visible">
             <h2 className="section-heading mb-5">Item Details</h2>
             <div className="flex flex-col gap-5">
               <Field label="Category" required hint="Choose the category that best matches your item.">
@@ -375,7 +375,7 @@ export default function ReportLostPage() {
             answerWarnings={answerWarnings}
           />
 
-          <div className="glass p-6">
+          <div className="glass p-6 max-md:p-4">
             <h2 className="section-heading mb-5">Where & When</h2>
             <div className="flex flex-col gap-5">
               <Field label="Campus Location">
@@ -418,7 +418,7 @@ export default function ReportLostPage() {
             </div>
           </div>
 
-          <div className="glass p-6">
+          <div className="glass p-6 max-md:p-4">
             <h2 className="section-heading mb-1">Photos</h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mb-5">
               Optional — up to 2 photos. JPEG, PNG, or WEBP, max 5 MB each.
@@ -449,7 +449,7 @@ export default function ReportLostPage() {
             <SubmitButton
               loading={isSubmitting || submitMutation.isPending}
               disabled={uploadingIdx !== null}
-              className="btn-primary min-w-[140px]"
+              className="btn-primary min-w-[140px] mobile-form-submit md:w-auto"
               loadingLabel="Submitting…"
             >
               Submit Report
