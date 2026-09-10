@@ -31,6 +31,7 @@ const queryClient = new QueryClient({
       staleTime: 0,
       retry: 1,
       refetchOnWindowFocus: true,
+      refetchOnMount: true,
     },
   },
 })

@@ -1,7 +1,6 @@
 """Pydantic schemas for AI Matching API (Feature G)."""
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -17,8 +16,8 @@ class MatchItemSummary(BaseModel):
     location_label: str
     image_urls: list[str]
     date_occurred: datetime
-    posted_by_username: str
-    posted_by_display_name: str
+        posted_by_username: str | None = None
+        posted_by_display_name: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -32,8 +31,6 @@ class PotentialMatchResponse(BaseModel):
     lost_item: MatchItemSummary
     found_item: MatchItemSummary
     user_role: str  # "lost_owner" | "found_owner"
-    conversation_id: Optional[uuid.UUID] = None
-    has_verification_attempt: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -44,7 +41,6 @@ class PotentialMatchListResponse(BaseModel):
 
 
 class ScorePreviewRequest(BaseModel):
-    """Debug: score two items without creating a match record."""
     lost_item_id: uuid.UUID
     found_item_id: uuid.UUID
 

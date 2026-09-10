@@ -3,12 +3,15 @@
  */
 import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useAuth } from '../context/AuthContext'
 import {
   getMyNotifications,
   markNotificationRead,
   markAllNotificationsRead,
 } from '../services/matchService'
+import { invalidateAfterNotificationChange } from '../utils/queryCache'
 import { Bell } from './icons'
+import ExpandableText from './ExpandableText'
 
 function parseAdminLink(link) {
   if (!link) return null
@@ -37,10 +40,12 @@ function timeAgo(isoString) {
   return `${Math.floor(hrs / 24)}d ago`
 }
 
-export default function AdminNotificationBell({ onNavigate }) {
+export default function AdminNotificationBell({ onNavigate, enabled = true }) {
+  const { isAuthenticated, authReady } = useAuth()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
+  const canFetch = enabled && isAuthenticated && authReady
 
   useEffect(() => {
     const handler = (e) => {
@@ -53,8 +58,9 @@ export default function AdminNotificationBell({ onNavigate }) {
   const { data: listData, isLoading } = useQuery({
     queryKey: ['notifications-list-admin'],
     queryFn: () => getMyNotifications({ limit: 50 }),
+    enabled: canFetch,
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: canFetch ? 60_000 : false,
   })
 
   const notifications = (listData?.notifications ?? []).filter(
@@ -65,16 +71,16 @@ export default function AdminNotificationBell({ onNavigate }) {
   const markReadMutation = useMutation({
     mutationFn: markNotificationRead,
     onSuccess: () => {
+      invalidateAfterNotificationChange(queryClient)
       queryClient.invalidateQueries({ queryKey: ['notifications-list-admin'] })
-      queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
     },
   })
 
   const markAllMutation = useMutation({
     mutationFn: markAllNotificationsRead,
     onSuccess: () => {
+      invalidateAfterNotificationChange(queryClient)
       queryClient.invalidateQueries({ queryKey: ['notifications-list-admin'] })
-      queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
     },
   })
 
@@ -86,6 +92,8 @@ export default function AdminNotificationBell({ onNavigate }) {
       onNavigate(parsed.section, parsed.id, parsed.meta)
     }
   }
+
+  if (!canFetch) return null
 
   return (
     <div className="relative" ref={ref}>
@@ -138,19 +146,30 @@ export default function AdminNotificationBell({ onNavigate }) {
                 <p className="py-10 text-center text-sm text-slate-500">No admin alerts</p>
               ) : (
                 notifications.map((notif) => (
-                  <button
+                  <div
                     key={notif.id}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => handleClick(notif)}
-                    className={`w-full text-left px-4 py-3 hover:bg-slate-800/60 transition-colors
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        handleClick(notif)
+                      }
+                    }}
+                    className={`w-full text-left px-4 py-3 hover:bg-slate-800/60 transition-colors cursor-pointer
                                 ${!notif.read ? 'bg-brand-600/10' : ''}`}
                   >
                     <p className={`text-sm ${!notif.read ? 'font-semibold text-slate-100' : 'text-slate-300'}`}>
                       {notif.title}
                     </p>
-                    <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">{notif.body}</p>
+                    <ExpandableText
+                      text={notif.body}
+                      className="text-xs text-slate-500 mt-0.5"
+                      buttonClassName="text-xs font-medium text-brand-400 hover:underline mt-1"
+                    />
                     <p className="text-[10px] text-slate-600 mt-1">{timeAgo(notif.created_at)}</p>
-                  </button>
+                  </div>
                 ))
               )}
             </div>

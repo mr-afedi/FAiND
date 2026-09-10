@@ -67,10 +67,16 @@ export function AuthProvider({ children }) {
   // Instead we only clear state; ProtectedRoute detects isAuthenticated=false
   // on its next render and handles the redirect to /login itself.
   useEffect(() => {
-    const handler = () => { _clearSession() }
+    const handler = () => {
+      _clearSession()
+      setTimeout(
+        () => navigate('/login', { replace: true, state: { sessionExpired: true } }),
+        0,
+      )
+    }
     window.addEventListener('faind:auth:expired', handler)
     return () => window.removeEventListener('faind:auth:expired', handler)
-  }, [_clearSession])
+  }, [_clearSession, navigate])
 
   // ── Public auth methods ───────────────────────────────────────────────────
   const login = useCallback(async (email, password) => {

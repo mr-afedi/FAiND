@@ -6,13 +6,16 @@ import { authService } from '../services/authService'
 import { useAuth } from '../context/AuthContext'
 
 const RESEND_COOLDOWN = 60
+const VERIFY_EMAIL_KEY = 'faind_verify_email'
 
 export default function VerifyEmailPage() {
   const location  = useLocation()
   const navigate  = useNavigate()
   const { afterEmailVerification } = useAuth()
 
-  const [email, setEmail]         = useState(location.state?.email || '')
+  const [email, setEmail]         = useState(
+    () => location.state?.email || sessionStorage.getItem(VERIFY_EMAIL_KEY) || '',
+  )
   const [code, setCode]           = useState(['', '', '', '', '', ''])
   const [loading, setLoading]     = useState(false)
   const [resending, setResending] = useState(false)
@@ -23,10 +26,12 @@ export default function VerifyEmailPage() {
   // On signup → code already sent, just start the cooldown timer.
   // On login redirect (fromLogin flag) → auto-request a fresh code immediately.
   useEffect(() => {
-    if (!location.state?.email) return
+    const resolvedEmail = location.state?.email || sessionStorage.getItem(VERIFY_EMAIL_KEY)
+    if (!resolvedEmail) return
+    sessionStorage.setItem(VERIFY_EMAIL_KEY, resolvedEmail)
     if (location.state?.fromLogin) {
       // Came from login with an unverified account — request a fresh code silently
-      authService.resendVerification(location.state.email).catch(() => {})
+      authService.resendVerification(resolvedEmail).catch(() => {})
     }
     startCooldown()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -81,9 +86,10 @@ export default function VerifyEmailPage() {
     setError('')
     try {
       const data = await authService.verifyEmail(email, fullCode)
+      sessionStorage.removeItem(VERIFY_EMAIL_KEY)
       toast.success('Email verified! Welcome to FAiND.')
       afterEmailVerification(data.access_token, data.user)
-      navigate('/', { replace: true })
+      navigate('/dashboard', { replace: true })
     } catch (err) {
       const detail = err.response?.data?.detail || 'Verification failed. Please try again.'
       setError(detail)
@@ -134,10 +140,15 @@ export default function VerifyEmailPage() {
         <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">
           Code expires in 15 minutes
         </p>
+        {location.state?.tokensClaimed > 0 && (
+          <p className="text-sm text-brand-600 dark:text-brand-400 mt-3">
+            Your {location.state.tokensClaimed} finder tokens are saved — verify your email to access your dashboard.
+          </p>
+        )}
       </div>
 
       {/* Email input if not pre-filled */}
-      {!location.state?.email && (
+      {!email && (
         <div className="mb-4">
           <label className="label" htmlFor="verify-email">Email address</label>
           <input

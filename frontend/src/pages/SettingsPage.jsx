@@ -527,14 +527,8 @@ export default function SettingsPage() {
           </form>
         </Section>
 
-        {/* ── Notifications (Section 25.3) ── */}
+        {/* ── Notifications (Section 14.3) ── */}
         <Section title="Notifications">
-          <Toggle
-            on={profile?.civic_alerts_enabled ?? false}
-            onChange={(v) => handleToggle('civic_alerts_enabled', v)}
-            label="Civic Lost-Item Alerts"
-            description="Get notified when new lost items are reported on campus"
-          />
           <Toggle
             on={(profile?.push_notifications_enabled && isSubscribed) ?? false}
             onChange={(v) => handleToggle('push_notifications_enabled', v)}
@@ -544,7 +538,7 @@ export default function SettingsPage() {
                 ? 'Blocked by browser — allow in browser settings then try again'
                 : !pushSupported
                 ? 'Not supported in this browser'
-                : 'Get push alerts for matches and messages, even when the app is closed'
+                : 'Get push alerts for matches, claims, and returns — even when the app is closed'
             }
           />
           <Toggle
@@ -559,7 +553,7 @@ export default function SettingsPage() {
         <div className="danger-zone">
           <h2 className="section-heading text-red-700 dark:text-red-400 mb-2">Danger Zone</h2>
           <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
-            Deleting your account is permanent. All posts, matches, and messages will be removed.
+            Deleting your account is permanent. All posts and matches will be removed.
           </p>
           <button
             onClick={() => setShowDeleteDialog(true)}

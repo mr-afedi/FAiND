@@ -17,6 +17,7 @@ from app.core.database import Base
 class ReturnMethod(str, PyEnum):
     DUAL_CONFIRM = "dual_confirm"
     QR_SCAN = "qr_scan"
+    HANDOVER = "handover"
 
 
 class ItemReturn(Base):
@@ -29,9 +30,9 @@ class ItemReturn(Base):
         UUID(as_uuid=True), ForeignKey("universities.id", ondelete="RESTRICT"),
         nullable=False, index=True,
     )
-    potential_match_id: Mapped[uuid.UUID] = mapped_column(
+    potential_match_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("potential_matches.id", ondelete="CASCADE"),
-        nullable=False, unique=True,
+        nullable=True, unique=True,
     )
     lost_item_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("items.id", ondelete="CASCADE"),
@@ -45,9 +46,16 @@ class ItemReturn(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    found_owner_id: Mapped[uuid.UUID] = mapped_column(
+    found_owner_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
+    )
+    handover_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("handovers.id", ondelete="CASCADE"),
+        nullable=True,
+        unique=True,
+        index=True,
     )
     finder_handed_over_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -69,9 +77,6 @@ class ItemReturn(Base):
     qr_consumed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    tipping_window_ends_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
     dispute_window_ends_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -79,13 +84,6 @@ class ItemReturn(Base):
         DateTime(timezone=True), nullable=True
     )
     admin_review_flagged: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    appreciation_skipped_until: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    appreciation_sent_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    tip_frozen: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     dispute_filed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

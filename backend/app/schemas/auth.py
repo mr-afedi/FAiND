@@ -123,7 +123,6 @@ class UserResponse(BaseModel):
     full_name: str
     role: str
     status: str
-    trust_score: int
     university_id: uuid.UUID
     profile_photo_url: Optional[str] = None
 
