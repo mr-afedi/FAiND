@@ -14,7 +14,9 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.item import Item, ItemStatus
 from app.models.item_return import ItemReturn
 from app.models.potential_match import PotentialMatch, PotentialMatchStatus
+from app.models.user import User
 from app.services import matching_service, notification_service, returned_items_service
+from app.services.fraud_service import HIGH_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +25,7 @@ DELETION_RETENTION_DAYS = 60
 
 _EXPIRABLE_STATUSES = (
     ItemStatus.OPEN,
+    ItemStatus.FOUND,
     ItemStatus.POTENTIAL_MATCH,
 )
 
@@ -36,6 +39,11 @@ _TERMINAL_ITEM_STATUSES = (
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _user_under_fraud_investigation(user: User | None) -> bool:
+    """Section 21.6 — block deletion queue when owner is under fraud investigation."""
+    return bool(user and user.fraud_risk_score >= HIGH_THRESHOLD)
 
 
 def expire_items_past_deadline(db: Session) -> int:
@@ -105,13 +113,13 @@ def send_expiry_reminders(db: Session) -> int:
     return count
 
 
-def archive_completed_returns(db: Session) -> int:
+def close_expired_tipping_windows(db: Session) -> int:
     """
-    Section 16.7 / 21.7 — daily: RETURNED → ARCHIVED after dispute window closes.
+    Section 16.3 / 21.7 — daily: RETURNED → ARCHIVED after tipping window closes.
     """
     count = returned_items_service.archive_completed_returns(db)
     if count:
-        logger.info("archive_completed_returns: archived %d item(s)", count)
+        logger.info("close_expired_tipping_windows: archived %d item(s)", count)
     return count
 
 
@@ -169,6 +177,8 @@ def queue_eligible_items_for_deletion(db: Session) -> int:
     count = 0
     for item in items:
         if item.status == ItemStatus.UNDER_DISPUTE:
+            continue
+        if _user_under_fraud_investigation(item.posted_by):
             continue
         item.deletion_queued_at = now
         item.updated_at = now

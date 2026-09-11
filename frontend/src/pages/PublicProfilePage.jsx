@@ -6,6 +6,15 @@ import { useAuth } from '../context/AuthContext'
 import NavBar from '../components/NavBar'
 import ReportModal from '../components/ReportModal'
 
+function tierClass(tier) {
+  switch (tier) {
+    case 'Community Champion': return 'tier-champion'
+    case 'Reliable Member':    return 'tier-reliable'
+    case 'Trusted Member':     return 'tier-trusted'
+    default:                   return 'tier-new'
+  }
+}
+
 export default function PublicProfilePage() {
   const { username } = useParams()
   const { user: me } = useAuth()
@@ -39,8 +48,10 @@ export default function PublicProfilePage() {
 
         {profile && (
           <>
+            {/* ── Profile card ── */}
             <div className="glass p-6 mb-4 animate-slide-up">
               <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                {/* Avatar */}
                 {profile.profile_photo_url ? (
                   <img
                     src={profile.profile_photo_url}
@@ -54,10 +65,14 @@ export default function PublicProfilePage() {
                   </div>
                 )}
 
+                {/* Info */}
                 <div className="flex-1 min-w-0">
-                  <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100 mb-1">
-                    {profile.full_name}
-                  </h1>
+                  <div className="flex flex-wrap items-center gap-2 mb-1">
+                    <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100">
+                      {profile.full_name}
+                    </h1>
+                    <span className={tierClass(profile.trust_tier)}>{profile.trust_tier}</span>
+                  </div>
                   <p className="text-sm text-slate-500 dark:text-slate-400">
                     @{profile.username}
                   </p>
@@ -79,15 +94,23 @@ export default function PublicProfilePage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 mb-4">
+            {/* ── Stats ── */}
+            <div className="grid grid-cols-2 gap-4 mb-4">
               <div className="stat-card text-center">
                 <span className="text-3xl font-bold text-slate-800 dark:text-slate-100 block">
                   {profile.items_returned_count}
                 </span>
                 <p className="text-sm text-slate-500 dark:text-slate-400">Items Returned</p>
               </div>
+              <div className="stat-card text-center">
+                <span className="text-3xl font-bold text-slate-800 dark:text-slate-100 block">
+                  {profile.tips_received_count}
+                </span>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Tips Received</p>
+              </div>
             </div>
 
+            {/* ── Action buttons ── */}
             <div className="flex gap-3">
               {me && me.username !== profile.username && (
                 <button

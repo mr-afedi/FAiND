@@ -1,15 +1,18 @@
 /**
  * ReturnedDetailPage — Section 16.2 / 27.13 (Feature N).
  */
-import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useState, useEffect, useRef } from 'react'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import NavBar from '../components/NavBar'
+import TipAppreciationModal from '../components/TipAppreciationModal'
 import {
   getReturnDetail,
+  skipAppreciation,
   disputeReturn,
 } from '../services/returnService'
+import { verifyTip } from '../services/tippingService'
 import { invalidateAfterReturn } from '../utils/queryCache'
 import { getCategoryLabel, Check, MapPin, ChevronLeft, AlertTriangle } from '../components/icons'
 import LoadingButton from '../components/LoadingButton'
@@ -18,15 +21,21 @@ import { useSubmitLock } from '../hooks/useSubmitLock'
 const METHOD_LABEL = {
   dual_confirm: 'Dual confirmation',
   qr_scan: 'QR scan',
-  handover: 'Authority handover',
 }
 
 export default function ReturnedDetailPage() {
   const { returnId } = useParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const [disputeOpen, setDisputeOpen] = useState(false)
   const [disputeReason, setDisputeReason] = useState('')
+  const [tipModalOpen, setTipModalOpen] = useState(false)
+  const verifyStarted = useRef(false)
+  const skipLock = useSubmitLock()
   const disputeLock = useSubmitLock()
+
+  const tipVerify = searchParams.get('tip_verify') === '1'
+  const tipReference = searchParams.get('reference')
 
   const { data: detail, isLoading, isError, refetch } = useQuery({
     queryKey: ['return-detail', returnId],
@@ -43,6 +52,17 @@ export default function ReturnedDetailPage() {
     })
   }
 
+  const skipMutation = useMutation({
+    mutationFn: () => skipAppreciation(returnId),
+    onSuccess: () => {
+      invalidate()
+      toast.success('You can send appreciation again in 24 hours.')
+      refetch()
+    },
+    onError: (err) => toast.error(err.response?.data?.detail || 'Could not skip'),
+    onSettled: () => skipLock.release(),
+  })
+
   const disputeMutation = useMutation({
     mutationFn: () => disputeReturn(returnId, disputeReason.trim()),
     onSuccess: () => {
@@ -55,6 +75,35 @@ export default function ReturnedDetailPage() {
     onError: (err) => toast.error(err.response?.data?.detail || 'Could not file dispute'),
     onSettled: () => disputeLock.release(),
   })
+
+  useEffect(() => {
+    if (!tipVerify || !tipReference || verifyStarted.current) return
+    verifyStarted.current = true
+
+    verifyTip(tipReference)
+      .then((result) => {
+        if (result.status === 'success') {
+          toast.success(result.message || 'Appreciation sent successfully.')
+          invalidateAfterReturn(queryClient, { returnId })
+          refetch()
+        } else if (result.status === 'pending') {
+          toast('Payment is still processing. Refresh in a moment if needed.', { icon: '⏳' })
+        } else {
+          toast.error(result.message || 'Could not verify payment.')
+        }
+      })
+      .catch((err) => {
+        toast.error(err.response?.data?.detail || 'Could not verify payment.')
+      })
+      .finally(() => {
+        setSearchParams((prev) => {
+          const next = new URLSearchParams(prev)
+          next.delete('tip_verify')
+          next.delete('reference')
+          return next
+        }, { replace: true })
+      })
+  }, [tipVerify, tipReference, returnId, queryClient, refetch, setSearchParams])
 
   if (isLoading) {
     return (
@@ -84,6 +133,10 @@ export default function ReturnedDetailPage() {
   const images = detail.lost_item?.image_urls?.length
     ? detail.lost_item.image_urls
     : detail.found_item?.image_urls || []
+
+  const chatHref = detail.conversation_id
+    ? `/messages/${detail.conversation_id}`
+    : null
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
@@ -122,7 +175,7 @@ export default function ReturnedDetailPage() {
           Returned {new Date(detail.returned_at).toLocaleString()}
         </p>
 
-        {detail.summary_note && (
+        {detail.summary_note && !detail.appreciation_message && (
           <p className="text-sm text-slate-600 dark:text-slate-400 mb-4 glass p-4 rounded-xl">
             {detail.summary_note}
           </p>
@@ -134,7 +187,8 @@ export default function ReturnedDetailPage() {
             {detail.other_user?.display_name}
           </p>
           <p className="text-xs text-slate-400 mt-0.5">
-            {detail.viewer_role === 'lost_owner' ? 'Finder' : 'Owner'}
+            {detail.other_user?.trust_tier}
+            {detail.viewer_role === 'lost_owner' ? ' · Finder' : ' · Owner'}
           </p>
         </div>
 
@@ -180,6 +234,62 @@ export default function ReturnedDetailPage() {
             <p className="text-sm text-slate-600 dark:text-slate-400 whitespace-pre-wrap">
               {detail.dispute_reason}
             </p>
+            {detail.tip_frozen && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                Any appreciation payment is frozen pending admin review.
+              </p>
+            )}
+          </div>
+        )}
+
+        {detail.appreciation_message && (
+          <div className="glass p-4 mb-4 text-sm text-teal-700 dark:text-teal-300">
+            {detail.appreciation_message}
+          </div>
+        )}
+
+        {detail.appreciation_sent && detail.viewer_role === 'lost_owner' && (
+          <div className="glass p-4 mb-4 text-sm text-teal-700 dark:text-teal-300">
+            You sent appreciation to the finder.
+            {detail.tip_frozen && ' (Frozen while dispute is open.)'}
+          </div>
+        )}
+
+        {detail.can_send_appreciation && (
+          <div className="glass p-5 mb-4 border border-brand-200/50 dark:border-brand-800/30">
+            <h2 className="text-sm font-semibold mb-1">Send appreciation</h2>
+            <p className="text-xs text-slate-500 mb-3">
+              {detail.tipping_days_left > 0
+                ? `${detail.tipping_days_left} day${detail.tipping_days_left !== 1 ? 's' : ''} left to send appreciation`
+                : 'Tipping window closing soon'}
+            </p>
+            {!detail.paystack_ready && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 mb-3">
+                Payments are not configured on this server yet. Contact your administrator.
+              </p>
+            )}
+            <button
+              type="button"
+              className="btn-primary w-full py-2.5 text-sm mb-2"
+              disabled={!detail.paystack_ready}
+              onClick={() => setTipModalOpen(true)}
+            >
+              Send Appreciation
+            </button>
+            {detail.can_skip_appreciation && (
+              <LoadingButton
+                className="btn-secondary w-full py-2.5 text-sm"
+                loading={skipLock.isSubmitting || skipMutation.isPending}
+                disabled={skipLock.isSubmitting || skipMutation.isPending}
+                loadingLabel="Saving…"
+                onClick={() => {
+                  if (!skipLock.tryAcquire()) return
+                  skipMutation.mutate()
+                }}
+              >
+                Skip for Now
+              </LoadingButton>
+            )}
           </div>
         )}
 
@@ -242,7 +352,23 @@ export default function ReturnedDetailPage() {
             </div>
           </div>
         )}
+
+        {chatHref && (
+          <Link
+            to={chatHref}
+            className="btn-secondary w-full text-center text-sm py-3 block"
+          >
+            {detail.chat_read_only ? 'View chat history (read-only)' : 'Open chat'}
+          </Link>
+        )}
       </div>
+
+      <TipAppreciationModal
+        open={tipModalOpen}
+        onClose={() => setTipModalOpen(false)}
+        returnId={returnId}
+        daysLeft={detail?.tipping_days_left ?? 0}
+      />
     </div>
   )
 }

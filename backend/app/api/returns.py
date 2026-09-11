@@ -86,6 +86,16 @@ def redeem_qr(
     return return_service.redeem_qr_token(db, current_user, payload.token)
 
 
+@router.post("/{return_id}/skip-appreciation", response_model=ReturnedDetailResponse)
+def skip_appreciation(
+    return_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    returned_items_service.skip_appreciation(db, return_id, current_user)
+    return return_service.get_return_detail(db, return_id, current_user)
+
+
 @router.post("/{return_id}/dispute", response_model=ReturnedDetailResponse)
 def dispute_return(
     return_id: uuid.UUID,

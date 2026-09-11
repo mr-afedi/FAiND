@@ -13,6 +13,7 @@ class ReturnPartySummary(BaseModel):
     id: uuid.UUID
     username: str
     display_name: str
+    trust_tier: str
 
 
 class ReturnItemSummary(BaseModel):
@@ -28,11 +29,12 @@ class ReturnItemSummary(BaseModel):
 class ReturnStatusResponse(BaseModel):
     return_id: uuid.UUID
     match_id: uuid.UUID
+    conversation_id: Optional[uuid.UUID] = None
     lost_item: ReturnItemSummary
     found_item: ReturnItemSummary
     lost_owner: ReturnPartySummary
     found_owner: ReturnPartySummary
-    viewer_role: str
+    viewer_role: str  # lost_owner | found_owner
     finder_handed_over: bool
     owner_received: bool
     is_complete: bool
@@ -40,6 +42,7 @@ class ReturnStatusResponse(BaseModel):
     method: Optional[ReturnMethod] = None
     qr_active: bool = False
     qr_expires_at: Optional[datetime] = None
+    tipping_window_ends_at: Optional[datetime] = None
     dispute_window_ends_at: Optional[datetime] = None
     can_confirm_finder: bool = False
     can_confirm_owner: bool = False
@@ -71,14 +74,16 @@ class DisputeReturnRequest(BaseModel):
 
 class ReturnedListItem(BaseModel):
     return_id: uuid.UUID
-    match_id: uuid.UUID | None = None
+    match_id: uuid.UUID
     item_label: str
     category: ItemCategory
     returned_at: datetime
-    other_user_display_name: str | None = None
-    drop_point_name: str | None = None
+    other_user_display_name: str
+    other_user_trust_tier: str
     viewer_role: str
     is_owner: bool
+    appreciation_sent: bool = False
+    appreciation_received: bool = False
     dispute_active: bool = False
 
 
@@ -88,7 +93,8 @@ class ReturnedListResponse(BaseModel):
 
 class ReturnedDetailResponse(BaseModel):
     return_id: uuid.UUID
-    match_id: uuid.UUID | None = None
+    match_id: uuid.UUID
+    conversation_id: Optional[uuid.UUID] = None
     returned_at: datetime
     method: ReturnMethod
     item_label: str
@@ -98,9 +104,21 @@ class ReturnedDetailResponse(BaseModel):
     other_user: ReturnPartySummary
     viewer_role: str
     dates_summary: dict
+    tipping_window_ends_at: Optional[datetime] = None
     dispute_window_ends_at: Optional[datetime] = None
+    tipping_window_open: bool = False
     dispute_window_open: bool = False
     dispute_active: bool = False
+    appreciation_sent: bool = False
+    appreciation_skipped_until: Optional[datetime] = None
+    tip_frozen: bool = False
+    tipping_days_left: int = 0
+    dispute_days_left: int = 0
+    can_send_appreciation: bool = False
+    can_skip_appreciation: bool = False
     can_dispute: bool = False
+    chat_read_only: bool = True
+    paystack_ready: bool = False
     summary_note: Optional[str] = None
+    appreciation_message: Optional[str] = None
     dispute_reason: Optional[str] = None

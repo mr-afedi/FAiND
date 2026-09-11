@@ -51,7 +51,7 @@ export async function uploadImageToCloudinary(file) {
 // ── Campus zones ──────────────────────────────────────────────────────────────
 
 export async function getCampusZones() {
-  const { data } = await api.get('/items/public/campus-zones')
+  const { data } = await api.get('/items/campus-zones')
   return data
 }
 
@@ -98,6 +98,12 @@ export async function findRecentLostItemMatch({
 
 export { isAmbiguousSubmitError, LOST_IDEMPOTENCY_WINDOW_MS }
 
+/** V4.3 — warn when hidden answers are too similar to public description */
+export async function checkLostHiddenAnswers(payload) {
+  const { data } = await api.post('/items/lost/check-hidden-answers', payload)
+  return data
+}
+
 export async function getMyLostItems({ skip = 0, limit = 20 } = {}) {
   const { data } = await api.get('/items/my/lost', { params: { skip, limit } })
   return data
@@ -105,16 +111,6 @@ export async function getMyLostItems({ skip = 0, limit = 20 } = {}) {
 
 export async function getItemDetail(itemId) {
   const { data } = await api.get(`/items/${itemId}`)
-  return data
-}
-
-export async function getItemInterestStatus(itemId) {
-  const { data } = await api.get(`/items/found/${itemId}/interest`)
-  return data
-}
-
-export async function registerItemInterest(itemId) {
-  const { data } = await api.post(`/items/found/${itemId}/interest`)
   return data
 }
 
@@ -139,24 +135,6 @@ export async function createFoundItem(payload) {
   return data
 }
 
-export async function getFoundItemByTrackingRef(trackingRef) {
-  const { data } = await api.get(`/items/found/track/${encodeURIComponent(trackingRef)}`)
-  return data
-}
-
-export async function updateFoundItemByTrackingRef(trackingRef, payload) {
-  const { data } = await api.patch(
-    `/items/found/track/${encodeURIComponent(trackingRef)}`,
-    payload,
-  )
-  return data
-}
-
-export async function updateFoundItem(itemId, payload) {
-  const { data } = await api.patch(`/items/found/${itemId}`, payload)
-  return data
-}
-
 export async function getMyFoundItems({ skip = 0, limit = 20 } = {}) {
   const { data } = await api.get('/items/my/found', { params: { skip, limit } })
   return data
@@ -168,23 +146,6 @@ export async function deleteFoundItem(itemId) {
 
 export async function extendFoundItem(itemId) {
   const { data } = await api.post(`/items/found/${itemId}/extend`)
-  return data
-}
-
-export async function confirmFoundDropOffByTrackingRef(trackingRef) {
-  const { data } = await api.post(
-    `/drop-off/track/${encodeURIComponent(trackingRef)}/finder-confirm`,
-  )
-  return data
-}
-
-export async function confirmFoundDropOffByItemId(itemId) {
-  const { data } = await api.post(`/drop-off/found/${itemId}/finder-confirm`)
-  return data
-}
-
-export async function getFoundItemFinderTrack(itemId) {
-  const { data } = await api.get(`/items/found/${itemId}/finder-track`)
   return data
 }
 

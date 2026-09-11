@@ -4,17 +4,36 @@ from typing import Optional
 from pydantic import BaseModel, field_validator
 
 
+# ── Trust tier helper (Section 17.2) ─────────────────────────────────────────
+
+def trust_tier(score: int) -> str:
+    if score <= 20:
+        return "New Member"
+    elif score <= 50:
+        return "Trusted Member"
+    elif score <= 100:
+        return "Reliable Member"
+    else:
+        return "Community Champion"
+
+
+# ── Public profile — strictly what Section 23.1 allows ───────────────────────
+
 class PublicProfileResponse(BaseModel):
     id: uuid.UUID
     username: str
     full_name: str
     profile_photo_url: Optional[str] = None
+    trust_tier: str
     university_short_name: str
-    member_since: str
-    items_returned_count: int
+    member_since: str          # "Month YYYY"
+    items_returned_count: int  # placeholder — populated in Feature M
+    tips_received_count: int   # placeholder — populated in Feature Q
 
     model_config = {"from_attributes": True}
 
+
+# ── Own profile — extended view on dashboard ─────────────────────────────────
 
 class OwnProfileResponse(BaseModel):
     id: uuid.UUID
@@ -25,15 +44,20 @@ class OwnProfileResponse(BaseModel):
     profile_photo_url: Optional[str] = None
     role: str
     status: str
+    trust_score: int
+    trust_tier: str
     university_id: uuid.UUID
     university_short_name: str
     civic_alerts_enabled: bool
     push_notifications_enabled: bool
     email_notifications_enabled: bool
     member_since: str
+    tips_received_count: int = 0
 
     model_config = {"from_attributes": True}
 
+
+# ── Update requests ───────────────────────────────────────────────────────────
 
 class UpdateProfileRequest(BaseModel):
     full_name: Optional[str] = None

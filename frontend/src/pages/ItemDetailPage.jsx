@@ -1,5 +1,19 @@
 /**
- * ItemDetailPage — /items/:id
+ * ItemDetailPage — /items/:id  (Section 27.5)
+ *
+ * All users:
+ *   - Back breadcrumb → browse page
+ *   - Poster name/avatar → public profile
+ *   - Category badge → browse page filtered by category
+ *   - Images → fullscreen lightbox
+ *
+ * Logged-in (not owner):
+ *   - "I Have This Item" (lost items) → Path B (Feature J)
+ *   - "This Might Be Mine" (found items) → Path C (Feature K)
+ *   - "Flag / Report Post" → Feature P
+ *
+ * Owner only:
+ *   - Extend Post / Remove Post / Mark as Returned → stubs for future features
  */
 import { useState } from 'react'
 import { Link, useParams, useNavigate } from 'react-router-dom'
@@ -9,20 +23,12 @@ import { useAuth } from '../context/AuthContext'
 import NavBar from '../components/NavBar'
 import ReportModal from '../components/ReportModal'
 import ItemUnavailablePage from './ItemUnavailablePage'
-import FinderDropOffSection from '../components/FinderDropOffSection'
-import FinderEditSection from '../components/FinderEditSection'
-import {
-  getItemDetail,
-  deleteItem,
-  deleteFoundItem,
-  extendItem,
-  extendFoundItem,
-  getFoundItemByTrackingRef,
-  getFoundItemFinderTrack,
-} from '../services/itemService'
+import { getItemDetail, deleteItem, deleteFoundItem, extendItem, extendFoundItem } from '../services/itemService'
 import { getMyMatches } from '../services/matchService'
+import { getReturnStatusByItem } from '../services/returnService'
 import { invalidateAfterItemChange } from '../utils/queryCache'
-import { pickPrimaryMatch } from '../utils/matchSelection'
+import { matchVerificationInProgress, matchChatUnlocked } from '../utils/viewerItemBadges'
+import { pickPrimaryMatch, matchNeedsVerification, matchVerificationComplete } from '../utils/matchSelection'
 import {
   CategoryIcon,
   CategoryLabel,
@@ -32,26 +38,38 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  Hand,
+  ScanSearch,
   Flag,
   Clock,
   Trash2,
 } from '../components/icons'
-import { ITEM_STATUS_PILL, formatItemStatus, statusPillClass } from '../utils/itemStatusStyles'
-import ViewerClaimBanner from '../components/ViewerClaimBanner'
-import {
-  isFinderForItem,
-  shouldShowFinderTrack,
-  getTrackingRefForItem,
-  getDropPointNameForItem,
-  saveFoundTrackingRef,
-  getLatestTrackingRef,
-} from '../utils/foundTracking'
 
-const STATUS_PILL = ITEM_STATUS_PILL
+const STATUS_PILL = {
+  open:               'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
+  found:              'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+  potential_match:    'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400',
+  under_verification: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+  under_dispute:      'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+  returned:           'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400',
+}
+
+const TIER_PILL = {
+  'Community Champion': 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400',
+  'Reliable Member':    'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400',
+  'Trusted Member':     'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+  'New Member':         'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400',
+}
+
+function formatStatus(s) {
+  return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
 
 function daysLeft(iso) {
   return Math.ceil((new Date(iso) - new Date()) / (1000 * 60 * 60 * 24))
 }
+
+// ── Lightbox ──────────────────────────────────────────────────────────────────
 
 function Lightbox({ images, startIdx, onClose }) {
   const [idx, setIdx] = useState(startIdx)
@@ -110,6 +128,27 @@ function Lightbox({ images, startIdx, onClose }) {
   )
 }
 
+// ── Compact action helpers ────────────────────────────────────────────────────
+
+function ItemBanner({ tone = 'slate', children, className = '' }) {
+  return (
+    <p className={`item-banner item-banner--${tone} ${className}`}>
+      {children}
+    </p>
+  )
+}
+
+function ItemBannerWithAction({ tone = 'green', message, action }) {
+  return (
+    <div className={`item-banner-row item-banner-row--${tone}`}>
+      <span className="text-left flex-1 min-w-0">{message}</span>
+      {action}
+    </div>
+  )
+}
+
+// ── Item detail page ──────────────────────────────────────────────────────────
+
 export default function ItemDetailPage() {
   const { itemId } = useParams()
   const { user, isAuthenticated } = useAuth()
@@ -125,72 +164,92 @@ export default function ItemDetailPage() {
 
   const isOwner = item && user && item.posted_by?.id === user.id
   const isLost  = item?.item_type === 'lost'
-  const isFinder = item && isFinderForItem(item, user?.id)
-  const trackingRef = item ? getTrackingRefForItem(item.id) : ''
-  const savedRef = trackingRef || getLatestTrackingRef()
-  const showFinderPanel = Boolean(!isLost && (isFinder || isOwner || savedRef))
 
-  const { data: finderTrackData, refetch: refetchFinderTrack } = useQuery({
-    queryKey: ['finder-track', itemId, trackingRef, user?.id],
-    queryFn: async () => {
-      const refToTry = trackingRef || getLatestTrackingRef()
-      if (refToTry) {
-        try {
-          const data = await getFoundItemByTrackingRef(refToTry)
-          if (String(data.id) === String(itemId)) {
-            saveFoundTrackingRef(refToTry, data.id, data.drop_point_name)
-            return data
-          }
-        } catch {
-          /* ref invalid or not for this item */
-        }
-      }
-      if (isOwner && !isLost) {
-        return getFoundItemFinderTrack(itemId)
-      }
-      return null
-    },
-    enabled: Boolean(showFinderPanel && itemId),
-  })
-
-  const isConfirmedFinder = showFinderPanel && finderTrackData && String(finderTrackData.id) === String(itemId)
-  const showFinderTrack = isConfirmedFinder && (shouldShowFinderTrack(item) || item?.status === 'at_droppoint')
-
-  const { data: matchData, isFetched: matchesFetched } = useQuery({
+  const { data: matchData } = useQuery({
     queryKey: ['my-matches-for-item', itemId],
     queryFn: getMyMatches,
     enabled: Boolean(isAuthenticated),
   })
-  const matchesReady = !isAuthenticated || matchesFetched
+
+  const isPathCMatch = (m) => m?.score_breakdown?.path === 'path_c'
+  const isPathBMatch = (m) => m?.score_breakdown?.path === 'path_b'
+
+  const ownerMatch = pickPrimaryMatch(
+    matchData?.matches,
+    (m) => m.user_role === 'lost_owner'
+      && String(m.lost_item?.id) === String(itemId)
+      && !isPathBMatch(m)
+      && !isPathCMatch(m)
+      && ['active', 'pending_review', 'verified'].includes(m.status),
+  )
+
+  const matchAsLostOwnerOnFound = pickPrimaryMatch(
+    matchData?.matches,
+    (m) => m.user_role === 'lost_owner'
+      && String(m.found_item?.id) === String(itemId)
+      && !isPathCMatch(m)
+      && ['active', 'pending_review', 'verified'].includes(m.status),
+  )
+
+  const matchAsFoundOwnerOnFound = matchData?.matches?.find(
+    (m) => m.user_role === 'found_owner'
+      && String(m.found_item?.id) === String(itemId)
+      && ['active', 'pending_review', 'verified'].includes(m.status),
+  )
+
+  const matchAsFoundOwnerOnLost = matchData?.matches?.find(
+    (m) => m.user_role === 'found_owner'
+      && String(m.lost_item?.id) === String(itemId)
+      && !isPathBMatch(m)
+      && ['active', 'pending_review', 'verified'].includes(m.status),
+  )
+
+  const pathBStatus = item?.viewer_path_b_status ?? null
+  const pathBConversationId = item?.viewer_path_b_conversation_id ?? null
+  const pathCStatus = item?.viewer_path_c_status ?? null
+  const pathCConversationId = item?.viewer_path_c_conversation_id ?? null
+
+  const verifiedReturnMatch = matchData?.matches?.find(
+    (m) => m.status === 'verified' && m.conversation_id && (
+      (m.user_role === 'lost_owner' && (
+        String(m.lost_item?.id) === String(itemId)
+        || String(m.found_item?.id) === String(itemId)
+      ))
+      || (m.user_role === 'found_owner' && (
+        String(m.found_item?.id) === String(itemId)
+        || String(m.lost_item?.id) === String(itemId)
+      ))
+    ),
+  )
+
+  const { data: returnStatus } = useQuery({
+    queryKey: ['return-status-by-item', itemId],
+    queryFn: () => getReturnStatusByItem(itemId),
+    enabled: Boolean(isAuthenticated && verifiedReturnMatch && item?.status !== 'returned'),
+    refetchInterval: (query) => {
+      const data = query.state.data
+      return data && !data.is_complete ? 5000 : false
+    },
+  })
+
+  const foundOwnerMatchedOnLost = Boolean(matchAsFoundOwnerOnLost)
+  const foundOwnerViewingMatchedLost = Boolean(
+    matchAsFoundOwnerOnLost && matchVerificationInProgress(matchAsFoundOwnerOnLost),
+  )
+  const foundOwnerChatOpenOnLost = Boolean(
+    matchAsFoundOwnerOnLost && matchChatUnlocked(matchAsFoundOwnerOnLost),
+  )
 
   const backTo    = isLost ? '/lost' : '/found'
   const backLabel = isLost ? 'Lost Items' : 'Found Items'
   const days      = item ? daysLeft(item.expiry_date) : 0
 
-  const MASKED_PUBLIC_STATUSES = [
-    'potential_match',
-    'under_verification',
-    'under_dispute',
-    'under_claim_review',
-  ]
-  const ownerMatch = pickPrimaryMatch(
-    matchData?.matches,
-    (m) => m.user_role === 'lost_owner'
-      && String(m.lost_item?.id) === String(itemId)
-      && ['active', 'pending_review', 'verified'].includes(m.status),
-  )
-  const pathAMatch = !isLost && pickPrimaryMatch(
-    matchData?.matches,
-    (m) => m.user_role === 'lost_owner'
-      && String(m.found_item?.id) === String(itemId)
-      && ['active', 'pending_review'].includes(m.status),
-  )
-  const viewerClaim = item?.viewer_claim
-  const needsInterestFlow = !isLost && ['found', 'overdue'].includes(item?.status)
-  const canClaimPathC = matchesReady && !isLost && isAuthenticated && !isOwner && !pathAMatch && !viewerClaim
-    && ['at_droppoint', 'under_claim_review'].includes(item?.status)
-  const canRegisterInterest = matchesReady && !isLost && isAuthenticated && !isOwner && !pathAMatch && !viewerClaim
-    && needsInterestFlow
+  // Path B/C: only block claims on terminal statuses (not during verification)
+  const NON_CLAIMABLE_STATUSES = ['returned', 'expired', 'archived', 'closed']
+  const isClaimable = item && !NON_CLAIMABLE_STATUSES.includes(item.status)
+
+  const lostOwnerViewingMatchedFound = Boolean(matchAsLostOwnerOnFound)
+  const MASKED_PUBLIC_STATUSES = ['potential_match', 'under_verification', 'under_dispute']
   const ownerLostStatus = item && isOwner && isLost && item.status === 'potential_match' && !ownerMatch
     ? 'open'
     : item?.status
@@ -203,8 +262,8 @@ export default function ItemDetailPage() {
   )
   const showStatusBadge = item && (
     isOwner
-      ? Boolean(STATUS_PILL[displayStatus] || displayStatus)
-      : !MASKED_PUBLIC_STATUSES.includes(item.status) && Boolean(STATUS_PILL[displayStatus] || displayStatus)
+      ? STATUS_PILL[displayStatus]
+      : !MASKED_PUBLIC_STATUSES.includes(item.status) && STATUS_PILL[displayStatus]
   )
 
   const deleteMutation = useMutation({
@@ -231,6 +290,20 @@ export default function ItemDetailPage() {
     deleteMutation.mutate(itemId)
   }
 
+  function handleClaimAction(path) {
+    if (!isAuthenticated) {
+      navigate('/login', { state: { from: `/items/${itemId}` } })
+      return
+    }
+    if (path === 'b' && isLost) {
+      navigate(`/i-have-this-item/${itemId}`)
+      return
+    }
+    if (path === 'c' && !isLost) {
+      navigate(`/this-might-be-mine/${itemId}`)
+    }
+  }
+
   if (isLoading) {
     return (
       <>
@@ -246,8 +319,9 @@ export default function ItemDetailPage() {
     return <ItemUnavailablePage />
   }
 
-  const poster   = item.posted_by
-  const initials = poster?.display_name
+  const poster     = item.posted_by
+  const tierLabel  = poster?.trust_tier ?? 'New Member'
+  const initials   = poster?.display_name
     ? poster.display_name.split(' ').map((n) => n[0]).slice(0, 2).join('').toUpperCase()
     : poster?.username?.[0]?.toUpperCase() ?? '?'
 
@@ -264,6 +338,7 @@ export default function ItemDetailPage() {
       )}
 
       <div className="page-container py-8 max-md:py-5 max-w-4xl overflow-x-hidden">
+        {/* ── Breadcrumb ── */}
         <div className="flex items-center gap-2 mb-6 text-sm text-slate-500 dark:text-slate-400">
           <Link to={backTo} className="inline-flex items-center gap-1 hover:text-brand-600 dark:hover:text-brand-400 transition-colors">
             <ChevronLeft className="w-4 h-4 shrink-0" aria-hidden />
@@ -276,39 +351,8 @@ export default function ItemDetailPage() {
           </span>
         </div>
 
-        {showFinderTrack && (
-          <FinderDropOffSection
-            itemId={itemId}
-            trackingRef={trackingRef || null}
-            trackData={finderTrackData}
-            dropPointName={finderTrackData?.drop_point_name || getDropPointNameForItem(item.id)}
-            onUpdated={(data) => {
-              refetchFinderTrack()
-              queryClient.invalidateQueries({ queryKey: ['item', itemId] })
-              if (data) {
-                queryClient.setQueryData(['finder-track', itemId, trackingRef, user?.id], data)
-              }
-            }}
-          />
-        )}
-
-        {isConfirmedFinder && finderTrackData?.can_edit && (
-          <FinderEditSection
-            itemId={itemId}
-            trackingRef={trackingRef || getLatestTrackingRef() || null}
-            trackData={finderTrackData}
-            onUpdated={async (data) => {
-              if (data?.tracking_reference) {
-                queryClient.setQueryData(['finder-track', itemId, trackingRef, user?.id], data)
-              } else {
-                await refetchFinderTrack()
-              }
-              queryClient.invalidateQueries({ queryKey: ['item', itemId] })
-            }}
-          />
-        )}
-
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 max-md:gap-4">
+          {/* ── Left: images ── */}
           <div className="lg:col-span-2 flex flex-col gap-3 max-md:gap-2">
             {item.image_urls?.length > 0 ? (
               <>
@@ -347,17 +391,20 @@ export default function ItemDetailPage() {
             )}
           </div>
 
+          {/* ── Right: details + actions ── */}
           <div className="lg:col-span-3 flex flex-col gap-4">
+            {/* Type + Status badges */}
             <div className="flex flex-wrap items-center gap-2">
               <span className={`text-xs font-bold px-2.5 py-1 rounded-full
                                ${isLost ? 'bg-red-500 text-white' : 'bg-brand-600 text-white'}`}>
                 {isLost ? 'LOST' : 'FOUND'}
               </span>
               {showStatusBadge && (
-                <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${statusPillClass(displayStatus)}`}>
-                  {formatItemStatus(displayStatus)}
+                <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${STATUS_PILL[displayStatus]}`}>
+                  {formatStatus(displayStatus)}
                 </span>
               )}
+              {/* Category — links back to browse filtered by category (Section 27.5) */}
               <Link
                 to={`${backTo}?category=${item.category}`}
                 className="text-xs font-medium px-2.5 py-1 rounded-full
@@ -369,6 +416,7 @@ export default function ItemDetailPage() {
               </Link>
             </div>
 
+            {/* Description */}
             <div>
               <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100 mb-2">
                 {isLost ? 'Lost Item' : 'Found Item'} Description
@@ -378,6 +426,7 @@ export default function ItemDetailPage() {
               </p>
             </div>
 
+            {/* Meta info */}
             <div className="glass p-3 rounded-xl flex flex-col gap-1.5 text-sm">
               <div className="flex justify-between">
                 <span className="text-slate-500 dark:text-slate-400">Location</span>
@@ -421,6 +470,7 @@ export default function ItemDetailPage() {
               )}
             </div>
 
+            {/* Poster info */}
             <div className="flex items-center gap-3 p-3 glass rounded-xl">
               <Link to={`/profile/${poster?.username}`}
                     className="flex-shrink-0 w-10 h-10 rounded-full bg-brand-600
@@ -434,67 +484,222 @@ export default function ItemDetailPage() {
                                  hover:text-brand-600 dark:hover:text-brand-400 transition-colors truncate block">
                   {poster?.display_name || poster?.username}
                 </Link>
+                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full
+                                  ${TIER_PILL[tierLabel] ?? TIER_PILL['New Member']}`}>
+                  {tierLabel}
+                </span>
               </div>
             </div>
 
+            {/* ── Action buttons ── */}
             <div className="item-action-stack mt-auto">
-              {viewerClaim && (
-                <ViewerClaimBanner viewerClaim={viewerClaim} />
-              )}
-
-              {!isOwner && pathAMatch && isAuthenticated && !viewerClaim && (
-                <Link
-                  to={`/claims/found/${itemId}?path=a`}
-                  className="btn-primary item-action-btn text-center"
-                >
-                  Verify Ownership
-                </Link>
-              )}
-
-              {canClaimPathC && (
-                <Link
-                  to={`/claims/found/${itemId}?path=c`}
-                  className="btn-primary item-action-btn text-center"
-                >
-                  This Might Be Mine
-                </Link>
-              )}
-
-              {canRegisterInterest && (
-                <Link
-                  to={`/items/${itemId}/interest`}
-                  className="btn-primary item-action-btn text-center"
-                >
-                  This Might Be Mine
-                </Link>
-              )}
-
-              {!isOwner && !isAuthenticated && !isLost && !viewerClaim && (
-                <button
-                  type="button"
-                  onClick={() => navigate('/login', { state: { from: `/items/${itemId}` } })}
-                  className="btn-primary item-action-btn"
-                >
-                  This Might Be Mine
-                </button>
-              )}
-
+              {/* Non-owner, logged-in or guest */}
               {!isOwner && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!isAuthenticated) navigate('/login', { state: { from: `/items/${itemId}` } })
-                    else setReportOpen(true)
-                  }}
-                  className="item-report-link w-full"
-                >
-                  <Flag className="w-3.5 h-3.5 shrink-0" aria-hidden />
-                  Flag / Report this post
-                </button>
+                <>
+                  {lostOwnerViewingMatchedFound && matchAsLostOwnerOnFound?.status === 'pending_review' && (
+                    <ItemBanner tone="amber">
+                      Your ownership verification for this item is currently under admin review.
+                    </ItemBanner>
+                  )}
+                  {lostOwnerViewingMatchedFound && matchAsLostOwnerOnFound?.status === 'active' && (
+                    <Link
+                      to={`/verify-ownership/${matchAsLostOwnerOnFound.id}`}
+                      className="btn-primary item-action-btn text-center"
+                    >
+                      Verify Ownership
+                    </Link>
+                  )}
+                  {lostOwnerViewingMatchedFound && matchAsLostOwnerOnFound?.status === 'verified'
+                    && matchAsLostOwnerOnFound.conversation_id && (
+                    <ItemBannerWithAction
+                      tone="green"
+                      message="Ownership verified — chat is open"
+                      action={(
+                        <Link
+                          to={`/messages/${matchAsLostOwnerOnFound.conversation_id}`}
+                          className="item-btn-inline"
+                        >
+                          Open Chat
+                        </Link>
+                      )}
+                    />
+                  )}
+                  {foundOwnerViewingMatchedLost && !pathBStatus && (
+                    <ItemBanner tone="violet">
+                      An ownership claim is in progress for your matched item
+                    </ItemBanner>
+                  )}
+                  {foundOwnerChatOpenOnLost && !pathBStatus && (
+                    <ItemBanner tone="green">
+                      You are matched with this item and chat is open
+                    </ItemBanner>
+                  )}
+                  {foundOwnerMatchedOnLost && matchAsFoundOwnerOnLost?.status === 'active' && !pathBStatus && (
+                    <ItemBanner tone="slate">
+                      You are already matched with this item. Waiting for the owner to verify ownership.
+                    </ItemBanner>
+                  )}
+                  {pathBStatus === 'rejected' && (
+                    <div className="item-action-stack">
+                      <ItemBanner tone="red">Claim not approved</ItemBanner>
+                      <button
+                        onClick={() => handleClaimAction('b')}
+                        className="btn-secondary item-action-btn"
+                      >
+                        Try Again
+                      </button>
+                    </div>
+                  )}
+                  {pathBStatus === 'under_review' && (
+                    <ItemBanner tone="amber">Your claim is under admin review</ItemBanner>
+                  )}
+                  {pathBStatus === 'approved' && (
+                    pathBConversationId ? (
+                      <ItemBannerWithAction
+                        tone="green"
+                        message="Your claim was approved — chat is open"
+                        action={(
+                          <Link to={`/messages/${pathBConversationId}`} className="item-btn-inline">
+                            Open Chat
+                          </Link>
+                        )}
+                      />
+                    ) : (
+                      <ItemBanner tone="green">Your claim was approved — chat is open</ItemBanner>
+                    )
+                  )}
+                  {pathBStatus === 'exhausted' && (
+                    <ItemBanner tone="slate">
+                      You have reached the maximum number of attempts for this item
+                    </ItemBanner>
+                  )}
+                  {!lostOwnerViewingMatchedFound && !pathBStatus && !foundOwnerMatchedOnLost && isClaimable && isLost && (
+                    <button
+                      onClick={() => handleClaimAction('b')}
+                      className="btn-primary item-action-btn inline-flex items-center justify-center gap-2"
+                    >
+                      <Hand className="w-4 h-4 shrink-0" aria-hidden />
+                      I Have This Item
+                    </button>
+                  )}
+                  {pathCStatus === 'rejected' && (
+                    <div className="item-action-stack">
+                      <ItemBanner tone="red">Claim not approved</ItemBanner>
+                      <button
+                        onClick={() => handleClaimAction('c')}
+                        className="btn-secondary item-action-btn"
+                      >
+                        Try Again
+                      </button>
+                    </div>
+                  )}
+                  {pathCStatus === 'under_review' && (
+                    <ItemBanner tone="amber">Your claim is under admin review</ItemBanner>
+                  )}
+                  {pathCStatus === 'approved' && (
+                    pathCConversationId ? (
+                      <ItemBannerWithAction
+                        tone="green"
+                        message="Your claim was approved — chat is open"
+                        action={(
+                          <Link to={`/messages/${pathCConversationId}`} className="item-btn-inline">
+                            Open Chat
+                          </Link>
+                        )}
+                      />
+                    ) : (
+                      <ItemBanner tone="green">Your claim was approved — chat is open</ItemBanner>
+                    )
+                  )}
+                  {pathCStatus === 'exhausted' && (
+                    <ItemBanner tone="slate">
+                      You have reached the maximum number of attempts for this item
+                    </ItemBanner>
+                  )}
+                  {!lostOwnerViewingMatchedFound && !pathCStatus && !pathBStatus && !foundOwnerMatchedOnLost
+                    && isClaimable && !isLost && (
+                    <button
+                      onClick={() => handleClaimAction('c')}
+                      className="btn-primary item-action-btn inline-flex items-center justify-center gap-2"
+                    >
+                      <ScanSearch className="w-4 h-4 shrink-0" aria-hidden />
+                      This Might Be Mine
+                    </button>
+                  )}
+                  {!lostOwnerViewingMatchedFound && !pathCStatus && !pathBStatus && !foundOwnerMatchedOnLost
+                    && !isClaimable && item && (
+                    <p className="text-xs text-center text-slate-400 dark:text-slate-500 py-1">
+                      This item is currently {formatStatus(displayStatus)} and cannot accept new claims.
+                    </p>
+                  )}
+                  {!foundOwnerViewingMatchedLost && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!isAuthenticated) navigate('/login', { state: { from: `/items/${itemId}` } })
+                        else setReportOpen(true)
+                      }}
+                      className="item-report-link w-full"
+                    >
+                      <Flag className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                      Flag / Report this post
+                    </button>
+                  )}
+                </>
               )}
 
+              {/* Return confirmation — both match parties (Section 15) */}
+              {isAuthenticated && verifiedReturnMatch && item?.status !== 'returned' && (
+                <div className="item-action-stack">
+                  {returnStatus?.awaiting_owner_receipt && (
+                    <ItemBanner tone="amber">
+                      The finder handed over your item. Please confirm you received it.
+                    </ItemBanner>
+                  )}
+                  {returnStatus?.awaiting_finder_handover && returnStatus?.viewer_role === 'found_owner' && (
+                    <ItemBanner tone="slate">
+                      The owner confirmed receipt. Confirm when you have handed over the item.
+                    </ItemBanner>
+                  )}
+                  {returnStatus?.finder_handed_over && returnStatus?.viewer_role === 'found_owner'
+                    && !returnStatus?.is_complete && (
+                    <p className="text-xs text-center text-slate-500 dark:text-slate-400 py-1">
+                      Waiting for the owner to confirm receipt.
+                    </p>
+                  )}
+                  <Link
+                    to={`/returns/confirm/${verifiedReturnMatch.id}`}
+                    className="btn-primary item-action-btn text-center"
+                  >
+                    <span className="inline-flex items-center justify-center gap-2">
+                      <Hand className="w-4 h-4 shrink-0" aria-hidden />
+                      {returnStatus?.awaiting_owner_receipt ? 'Confirm You Received It' : 'Confirm Return'}
+                    </span>
+                  </Link>
+                </div>
+              )}
+
+              {/* Owner actions */}
               {isOwner && (
                 <div className="item-action-stack">
+                  {matchNeedsVerification(ownerMatch) && (
+                    <Link
+                      to={`/verify-ownership/${ownerMatch.id}`}
+                      className="btn-primary item-action-btn text-center"
+                    >
+                      Verify Ownership
+                    </Link>
+                  )}
+                  {isLost && ownerMatch?.status === 'pending_review' && (
+                    <ItemBanner tone="amber">
+                      Your claim on a matched found item is currently under admin review.
+                    </ItemBanner>
+                  )}
+                  {!isLost && matchAsFoundOwnerOnFound?.status === 'pending_review' && (
+                    <ItemBanner tone="amber">
+                      Admin is currently reviewing an ownership claim for this item.
+                    </ItemBanner>
+                  )}
                   {item.status === 'returned' && (
                     <Link
                       to="/dashboard?tab=returned"
@@ -503,19 +708,53 @@ export default function ItemDetailPage() {
                       View in Returned
                     </Link>
                   )}
-                  {item.extensions_used < 2 && days > 0 && days <= 7 && (
-                    <button
-                      onClick={() => extendMutation.mutate(itemId)}
-                      disabled={extendMutation.isPending}
-                      className="btn-secondary item-action-btn"
-                    >
-                      {extendMutation.isPending ? 'Extending…' : (
-                        <span className="inline-flex items-center justify-center gap-1.5">
-                          <Clock className="w-3.5 h-3.5 shrink-0" aria-hidden />
-                          Extend Post (+30 days)
-                        </span>
+                  {matchVerificationComplete(ownerMatch) && ownerMatch.conversation_id
+                    && item.extensions_used < 2 && days > 0 && days <= 7 ? (
+                    <div className="item-action-row">
+                      <Link
+                        to={`/messages/${ownerMatch.conversation_id}`}
+                        className="btn-secondary item-action-btn text-center"
+                      >
+                        Open Chat
+                      </Link>
+                      <button
+                        onClick={() => extendMutation.mutate(itemId)}
+                        disabled={extendMutation.isPending}
+                        className="btn-secondary item-action-btn"
+                      >
+                        {extendMutation.isPending ? 'Extending…' : (
+                          <span className="inline-flex items-center justify-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                            Extend (+30d)
+                          </span>
+                        )}
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      {matchVerificationComplete(ownerMatch) && ownerMatch.conversation_id && (
+                        <Link
+                          to={`/messages/${ownerMatch.conversation_id}`}
+                          className="btn-secondary item-action-btn text-center"
+                        >
+                          Open Chat
+                        </Link>
                       )}
-                    </button>
+                      {item.extensions_used < 2 && days > 0 && days <= 7 && (
+                        <button
+                          onClick={() => extendMutation.mutate(itemId)}
+                          disabled={extendMutation.isPending}
+                          className="btn-secondary item-action-btn"
+                        >
+                          {extendMutation.isPending ? 'Extending…' : (
+                            <span className="inline-flex items-center justify-center gap-1.5">
+                              <Clock className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                              Extend Post (+30 days)
+                            </span>
+                          )}
+                        </button>
+                      )}
+                    </>
                   )}
                   <button
                     onClick={handleDelete}

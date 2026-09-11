@@ -8,7 +8,7 @@ Score formula (Section 10.1):
   Description 0.45 | Image 0.15 | Location 0.125 | Date 0.125 | Category 0.15
   Image weight redistributes when either item has no image.
 
-Threshold: >= 0.60 → PotentialMatch + notify lost owner; lost item → POTENTIAL_MATCH.
+Threshold: >= 0.60 → PotentialMatch + notify both users; lost item → POTENTIAL_MATCH.
 """
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ import io
 import logging
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Optional
 
 import httpx
@@ -28,12 +29,13 @@ from sqlalchemy.orm import Session, joinedload, aliased
 from app.models.item import Item, ItemCategory, ItemType, ItemStatus
 from app.models.user import User, AccountStatus
 from app.models.potential_match import PotentialMatch, PotentialMatchStatus
+from app.models.conversation import Conversation, ConversationStatus
+from app.models.verification_attempt import VerificationAttempt, VerificationResult
 from app.services import notification_service
 
 logger = logging.getLogger(__name__)
 
 MATCH_THRESHOLD = 0.60
-MATCH_TIMEOUT_DAYS = 14
 _MIN_DESCRIPTION_SIMILARITY = 0.35
 
 # Base weights (Section 10.1)
@@ -54,41 +56,20 @@ _POOL_STATUSES = [
 # When the new item is FOUND, we search for LOST items (OPEN or POTENTIAL_MATCH)
 # When the new item is LOST, we search for FOUND items (FOUND or POTENTIAL_MATCH)
 _LOST_CANDIDATES_POOL = [ItemStatus.OPEN, ItemStatus.POTENTIAL_MATCH]
-_FOUND_CANDIDATES_POOL = [
-    ItemStatus.FOUND,
-    ItemStatus.OVERDUE,
-    ItemStatus.AT_DROPPOINT,
-    ItemStatus.POTENTIAL_MATCH,
-]
+_FOUND_CANDIDATES_POOL = [ItemStatus.FOUND, ItemStatus.POTENTIAL_MATCH]
 
 
-# ── ML model (loaded once at app startup) ───────────────────────────────────────
+# ── ML model (lazy singleton) ───────────────────────────────────────────────────
 
-_app_sentence_model = None
-
-
-def set_app_sentence_model(model) -> None:
-    """Called from FastAPI lifespan — stores model in app.state and module cache."""
-    global _app_sentence_model
-    _app_sentence_model = model
-
-
-def load_sentence_model_at_startup():
-    """Load all-MiniLM-L6-v2 once at startup (~80MB). Returns None if unavailable."""
-    logger.info("[ML] Loading sentence-transformers model all-MiniLM-L6-v2 at startup...")
+@lru_cache(maxsize=1)
+def _get_sentence_model():
+    """Load all-MiniLM-L6-v2 once (~80MB). Returns None if not installed."""
     try:
         from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer("all-MiniLM-L6-v2")
-        logger.info("[ML] Model loaded successfully — reused for all matching requests")
-        return model
+        return SentenceTransformer("all-MiniLM-L6-v2")
     except Exception as exc:
-        logger.warning("[ML] sentence-transformers unavailable: %s — using text fallback", exc)
+        logger.warning("sentence-transformers unavailable: %s — using text fallback", exc)
         return None
-
-
-def _get_sentence_model():
-    """Return the model loaded at startup. Never instantiate per request."""
-    return _app_sentence_model
 
 
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -96,6 +77,15 @@ def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     if denom == 0.0:
         return 0.0
     return float(np.dot(a, b) / denom)
+
+
+def _embed_texts(texts: list[str]) -> list[np.ndarray]:
+    model = _get_sentence_model()
+    if model is not None:
+        vecs = model.encode(texts, normalize_embeddings=True)
+        return [np.array(v, dtype=np.float32) for v in vecs]
+    # Token-overlap fallback when sentence-transformers is not installed
+    return [_token_vector(t) for t in texts]
 
 
 def _token_vector(text: str) -> np.ndarray:
@@ -109,65 +99,8 @@ def _token_vector(text: str) -> np.ndarray:
     return vec / norm if norm > 0 else vec
 
 
-def encode_description(text: str, model=None) -> list[float] | None:
-    """Encode a single description to a storable embedding vector."""
-    text = (text or "").strip()
-    if not text:
-        return None
-    model = model if model is not None else _get_sentence_model()
-    if model is not None:
-        vec = model.encode(text, normalize_embeddings=True)
-        return np.array(vec, dtype=np.float32).tolist()
-    return _token_vector(text).tolist()
-
-
-def attach_description_embedding(item: Item) -> None:
-    """Compute and attach embedding on new items before first commit."""
-    if item.description_embedding:
-        return
-    emb = encode_description(item.public_description)
-    if emb is not None:
-        item.description_embedding = emb
-
-
-def ensure_item_embedding(db: Session, item: Item) -> None:
-    """Ensure item has a stored embedding; compute and cache legacy rows on the fly."""
-    if item.description_embedding:
-        return
-    emb = encode_description(item.public_description)
-    if emb is None:
-        return
-    item.description_embedding = emb
-    db.flush()
-
-
-def _vector_from_item(item: Item) -> np.ndarray | None:
-    raw = item.description_embedding
-    if not raw:
-        return None
-    return np.array(raw, dtype=np.float32)
-
-
-def _embed_texts(texts: list[str]) -> list[np.ndarray]:
-    """Fallback batch encode when stored embeddings are unavailable."""
-    model = _get_sentence_model()
-    if model is not None:
-        vecs = model.encode(texts, normalize_embeddings=True)
-        return [np.array(v, dtype=np.float32) for v in vecs]
-    return [_token_vector(t) for t in texts]
-
-
-def description_similarity_for_items(item_a: Item, item_b: Item) -> float:
-    """Compare stored embeddings — no re-encoding when both are cached."""
-    vec_a = _vector_from_item(item_a)
-    vec_b = _vector_from_item(item_b)
-    if vec_a is not None and vec_b is not None:
-        return max(0.0, min(1.0, _cosine_similarity(vec_a, vec_b)))
-    return description_similarity(item_a.public_description, item_b.public_description)
-
-
 def description_similarity(text_a: str, text_b: str) -> float:
-    """Section 10.2 — public descriptions only (text fallback path)."""
+    """Section 10.2 — public descriptions only."""
     if not text_a.strip() or not text_b.strip():
         return 0.0
     vecs = _embed_texts([text_a.strip(), text_b.strip()])
@@ -290,25 +223,15 @@ def _disqualified_breakdown(reason: str, **fields: float) -> dict:
 
 # ── Combined score (Section 10.1) ─────────────────────────────────────────────
 
-def compute_match_score(
-    item_a: Item,
-    item_b: Item,
-    *,
-    db: Session | None = None,
-) -> tuple[float, dict]:
+def compute_match_score(item_a: Item, item_b: Item) -> tuple[float, dict]:
     """
     Returns (total_score, breakdown_dict).
     Public descriptions only — private descriptions never used (Section 10.2).
-    Uses stored description_embedding when available.
     """
-    if db is not None:
-        ensure_item_embedding(db, item_a)
-        ensure_item_embedding(db, item_b)
-
     if _is_category_hard_blocked(item_a.category, item_b.category):
         return 0.0, _disqualified_breakdown("category_mismatch", category=0.0)
 
-    desc = description_similarity_for_items(item_a, item_b)
+    desc = description_similarity(item_a.public_description, item_b.public_description)
     if desc < _MIN_DESCRIPTION_SIMILARITY:
         return 0.0, _disqualified_breakdown(
             "description_below_minimum",
@@ -380,25 +303,21 @@ def _get_opposing_candidates(db: Session, source: Item) -> list[Item]:
         opposing_type = ItemType.LOST
         statuses = _LOST_CANDIDATES_POOL
 
-    q = (
+    return (
         db.query(Item)
-        .outerjoin(Item.posted_by)
+        .join(Item.posted_by)
         .options(joinedload(Item.posted_by))
         .filter(
             Item.university_id == source.university_id,
             Item.item_type == opposing_type,
             Item.status.in_(statuses),
             Item.id != source.id,
+            Item.posted_by_id != source.posted_by_id,
             Item.hidden_by_suspension == False,
-            or_(
-                Item.posted_by_id.is_(None),
-                User.status == AccountStatus.ACTIVE,
-            ),
+            User.status == AccountStatus.ACTIVE,
         )
+        .all()
     )
-    if source.posted_by_id is not None:
-        q = q.filter(Item.posted_by_id != source.posted_by_id)
-    return q.all()
 
 
 def _existing_match(db: Session, lost_id: uuid.UUID, found_id: uuid.UUID) -> bool:
@@ -467,15 +386,8 @@ def run_matching_for_item(db: Session, item_id: uuid.UUID) -> list[PotentialMatc
     if source.status not in _POOL_STATUSES:
         return []
 
-    if source.hidden_by_suspension:
+    if source.hidden_by_suspension or source.posted_by.status != AccountStatus.ACTIVE:
         return []
-    if source.posted_by is not None and source.posted_by.status != AccountStatus.ACTIVE:
-        return []
-
-    legacy_embedding_updates = False
-    if not source.description_embedding:
-        ensure_item_embedding(db, source)
-        legacy_embedding_updates = True
 
     candidates = _get_opposing_candidates(db, source)
     print(
@@ -504,10 +416,6 @@ def run_matching_for_item(db: Session, item_id: uuid.UUID) -> list[PotentialMatc
                 flush=True,
             )
             continue
-
-        if not candidate.description_embedding:
-            ensure_item_embedding(db, candidate)
-            legacy_embedding_updates = True
 
         score, breakdown = compute_match_score(lost_item, found_item)
         w = breakdown.get("weights", {})
@@ -545,18 +453,12 @@ def run_matching_for_item(db: Session, item_id: uuid.UUID) -> list[PotentialMatc
         match = _create_potential_match(db, lost_item, found_item, score, breakdown)
         created.append(match)
 
-    if created or legacy_embedding_updates:
+    if created:
         db.commit()
-        if created:
-            print(
-                f"\n[Matching] ✅ Done — {len(created)} PotentialMatch record(s) saved for item {source.id}\n",
-                flush=True,
-            )
-        else:
-            print(
-                f"\n[Matching] ✅ Done — no matches above threshold for item {source.id}\n",
-                flush=True,
-            )
+        print(
+            f"\n[Matching] ✅ Done — {len(created)} PotentialMatch record(s) saved for item {source.id}\n",
+            flush=True,
+        )
     else:
         print(
             f"\n[Matching] ✅ Done — no matches above threshold for item {source.id}\n",
@@ -604,6 +506,7 @@ def _revert_item_to_active_pool(item: Item) -> None:
 def _expire_matches_for_archived_item(db: Session, item_id: uuid.UUID) -> list[PotentialMatch]:
     """
     Expire all live PotentialMatch rows for this item and revert the surviving peer.
+    Path B/C claims use PENDING_REVIEW matches until dedicated claim tables exist.
     Does not commit — caller must commit.
     """
     matches = (
@@ -627,57 +530,60 @@ def _expire_matches_for_archived_item(db: Session, item_id: uuid.UUID) -> list[P
             if paired.id != item_id:
                 _revert_item_to_active_pool(paired)
 
+        conv = (
+            db.query(Conversation)
+            .filter(Conversation.potential_match_id == match.id)
+            .first()
+        )
+        if conv and conv.status != ConversationStatus.FROZEN:
+            conv.status = ConversationStatus.FROZEN
+
     return matches
 
 
-def cleanup_on_item_archive(db: Session, item_id: uuid.UUID) -> int:
-    """Archive side-effects (Section 21.5): expire matches and revert peer items."""
+def _cancel_active_verifications_for_item(db: Session, item_id: uuid.UUID) -> int:
+    """
+    Cancel in-flight verifications: admin-review (REVIEW) attempts for this item.
+    Covers Path A/B/C — Path B/C enums exist; claim rows are not separate yet.
+    Does not commit — caller must commit.
+    """
+    attempts = (
+        db.query(VerificationAttempt)
+        .filter(
+            VerificationAttempt.result == VerificationResult.REVIEW,
+            or_(
+                VerificationAttempt.lost_item_id == item_id,
+                VerificationAttempt.found_item_id == item_id,
+            ),
+        )
+        .all()
+    )
+    for attempt in attempts:
+        attempt.result = VerificationResult.REJECTED
+    return len(attempts)
+
+
+def cleanup_on_item_archive(db: Session, item_id: uuid.UUID) -> tuple[int, int]:
+    """
+    Full archive side-effects (Section 21.5): expire matches, cancel pending
+    verifications, freeze chats. Single commit at end.
+    """
     expired_matches = _expire_matches_for_archived_item(db, item_id)
+    cancelled_attempts = _cancel_active_verifications_for_item(db, item_id)
     db.commit()
     logger.info(
-        "cleanup_on_item_archive: item=%s expired_matches=%d",
+        "cleanup_on_item_archive: item=%s expired_matches=%d cancelled_verifications=%d",
         item_id,
         len(expired_matches),
+        cancelled_attempts,
     )
-    return len(expired_matches)
+    return len(expired_matches), cancelled_attempts
 
 
 def expire_matches_for_archived_item(db: Session, item_id: uuid.UUID) -> int:
     """Backward-compatible wrapper — prefer cleanup_on_item_archive from delete flows."""
-    return cleanup_on_item_archive(db, item_id)
-
-
-def expire_stale_potential_matches(db: Session) -> int:
-    """Revert POTENTIAL_MATCH to OPEN after 14 days with no activity."""
-    cutoff = datetime.now(timezone.utc) - timedelta(days=MATCH_TIMEOUT_DAYS)
-    stale_matches = (
-        db.query(PotentialMatch)
-        .options(joinedload(PotentialMatch.lost_item))
-        .filter(
-            PotentialMatch.status == PotentialMatchStatus.ACTIVE,
-            PotentialMatch.created_at < cutoff,
-        )
-        .all()
-    )
-    expired_count = 0
-    for match in stale_matches:
-        match.status = PotentialMatchStatus.EXPIRED
-        if match.lost_item.status == ItemStatus.POTENTIAL_MATCH:
-            match.lost_item.status = ItemStatus.OPEN
-        notification_service.notify_potential_match_expired(
-            db,
-            owner_id=match.lost_item.posted_by_id,
-            lost_item_id=match.lost_item_id,
-            match_id=match.id,
-        )
-        expired_count += 1
-        print(
-            f"[Lifecycle] POTENTIAL_MATCH expired — match={match.id} lost_item={match.lost_item_id}",
-            flush=True,
-        )
-    if expired_count:
-        db.commit()
-    return expired_count
+    count, _ = cleanup_on_item_archive(db, item_id)
+    return count
 
 
 # ── Dispute helpers (Section 10.10) ──────────────────────────────────────────
@@ -767,7 +673,19 @@ def resume_matches_for_item(db: Session, item_id: uuid.UUID) -> int:
 # ── Read helpers ──────────────────────────────────────────────────────────────
 
 def is_ai_potential_match(match: PotentialMatch) -> bool:
-    """All PotentialMatch rows are AI matches in W1."""
+    """
+    True for Feature G AI matches only — not Path B/C claim bridge matches.
+    Bridge matches reuse PotentialMatch but must not show as AI potential matches.
+    """
+    breakdown = match.score_breakdown or {}
+    if breakdown.get("path") in ("path_b", "path_c"):
+        return False
+    found = match.found_item
+    lost = match.lost_item
+    if found is not None and getattr(found, "path_b_bridge", False):
+        return False
+    if lost is not None and getattr(lost, "path_c_bridge", False):
+        return False
     return True
 
 
@@ -817,6 +735,31 @@ def _live_matches_for_user_query(db: Session, user_id: uuid.UUID):
             ),
         )
     )
+
+
+def get_chat_unlocked_item_ids(db: Session, user_id: uuid.UUID) -> set[uuid.UUID]:
+    """
+    Own + peer item IDs in verified matches with unlocked chat for this viewer.
+    Used by homepage/browse cards for the \"Chat Opened\" badge.
+    """
+    q = _live_matches_for_user_query(db, user_id)
+    if q is None:
+        return set()
+
+    result: set[uuid.UUID] = set()
+    for match in q.filter(PotentialMatch.status == PotentialMatchStatus.VERIFIED).all():
+        conv = (
+            db.query(Conversation)
+            .filter(
+                Conversation.potential_match_id == match.id,
+                Conversation.status == ConversationStatus.UNLOCKED,
+            )
+            .first()
+        )
+        if conv:
+            result.add(match.lost_item_id)
+            result.add(match.found_item_id)
+    return result
 
 
 def get_matched_item_ids(db: Session, user_id: uuid.UUID) -> set[uuid.UUID]:

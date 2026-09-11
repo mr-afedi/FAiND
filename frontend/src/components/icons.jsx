@@ -78,7 +78,7 @@ export function CategoryIcon({ category, className = defaultIconClass }) {
   return <Icon className={className} aria-hidden />
 }
 
-export function CategoryLabel({ category, className = 'inline-flex items-left gap-1.5' }) {
+export function CategoryLabel({ category, className = 'inline-flex items-center gap-1.5' }) {
   const { Icon, label } = getCategoryMeta(category)
   return (
     <span className={className}>

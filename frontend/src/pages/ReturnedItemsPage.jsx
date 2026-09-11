@@ -27,15 +27,26 @@ function ReturnedPublicCard({ item }) {
           <p className="text-xs font-medium text-slate-400 dark:text-slate-500 uppercase tracking-wide">
             {getCategoryLabel(item.category)}
           </p>
+          <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 mt-0.5 line-clamp-2">
+            {item.item_name}
+          </p>
         </div>
       </div>
       <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-200/60 dark:border-slate-700/50">
-        <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full
-                         bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300
-                         inline-flex items-center gap-1">
-          <Check className="w-3 h-3" aria-hidden />
-          Successfully returned
-        </span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full
+                           bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300
+                           inline-flex items-center gap-1">
+            <Check className="w-3 h-3" aria-hidden />
+            Returned
+          </span>
+          {item.finder_tipped && (
+            <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full
+                             bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+              Tipped
+            </span>
+          )}
+        </div>
         <div className="text-right text-xs text-slate-500 dark:text-slate-400">
           <p>{date}</p>
           <p>{item.university_short_name}</p>

@@ -11,12 +11,13 @@
  */
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ChevronDown, ChevronUp } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../context/AuthContext'
 import NavBar from '../components/NavBar'
 import ItemCard from '../components/ItemCard'
 import { getHomepageData } from '../services/itemService'
+import { getMyMatches } from '../services/matchService'
+import { getViewerBadge } from '../utils/viewerItemBadges'
 import {
   Search,
   PartyPopper,
@@ -28,8 +29,6 @@ import {
   Zap,
   AlertTriangle,
   Plus,
-  CategoryIcon,
-  getCategoryLabel,
 } from '../components/icons'
 
 // Multiple Unsplash URLs tried in order; falls back to a gradient if all fail
@@ -75,7 +74,7 @@ function FAB({ isAuthenticated }) {
 
   function handleAction(path) {
     setOpen(false)
-    if (path === '/report/found' || isAuthenticated) {
+    if (isAuthenticated) {
       navigate(path)
     } else {
       navigate('/login', { state: { from: path } })
@@ -83,11 +82,8 @@ function FAB({ isAuthenticated }) {
   }
 
   return (
-    <div className="fixed z-50 flex flex-col items-end gap-2
-                    bottom-[calc(1.5rem+env(safe-area-inset-bottom))]
-                    right-6
-                    max-md:bottom-[calc(4.5rem+env(safe-area-inset-bottom))]
-                    max-md:right-4">
+    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-2
+                    max-md:bottom-[4.5rem] max-md:right-4">
       {open && (
         <>
           <button
@@ -158,62 +154,22 @@ function EmptyPreview({ message }) {
 
 // ── Recently Returned teaser (Section 16.6) ───────────────────────────────────
 
-function RecentlyReturnedTeaser({ count, items = [] }) {
+function RecentlyReturnedTeaser({ count }) {
   if (!count || count < 1) return null
   const countLabel = count === 1 ? '1 item' : `${count} items`
   return (
-    <section className="py-8 max-md:py-4 px-4 border-t border-slate-200/70 dark:border-slate-800/60">
-      <div className="max-w-5xl mx-auto">
-        <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
-          <div>
-            <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100">Recently Returned</h2>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-              {countLabel} reunited on GCTU campus this week.
-            </p>
-          </div>
-          <Link
-            to="/returned"
-            className="text-sm text-brand-600 dark:text-brand-400 hover:underline"
-          >
-            See all →
-          </Link>
-        </div>
-        {items.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {items.map((item) => {
-              const date = new Date(item.returned_at).toLocaleDateString(undefined, {
-                month: 'short',
-                day: 'numeric',
-              })
-              return (
-                <div
-                  key={item.id}
-                  className="glass p-4 rounded-xl border border-teal-100/80 dark:border-teal-900/40"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-lg bg-teal-50 dark:bg-teal-900/40 flex items-center justify-center text-teal-700 dark:text-teal-300">
-                      <CategoryIcon category={item.category} className="w-4 h-4" aria-hidden />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">
-                        {getCategoryLabel(item.category)}
-                      </p>
-                      <p className="text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold mt-0.5">
-                        Successfully returned
-                      </p>
-                    </div>
-                    <div className="text-right text-[11px] text-slate-500 shrink-0">
-                      <p>{date}</p>
-                      <p>{item.university_short_name}</p>
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </div>
-    </section>
+    <div className="py-8 max-md:py-2 max-md:px-4 text-center border-t border-slate-200/70 dark:border-slate-800/60">
+      <p className="text-sm max-md:text-xs text-slate-600 dark:text-slate-400 max-md:leading-snug">
+        <span className="font-medium text-emerald-700 dark:text-emerald-400">{countLabel}</span>
+        {' '}returned this week on GCTU campus ·{' '}
+        <Link
+          to="/returned"
+          className="text-slate-500 dark:text-slate-400 hover:text-brand-600 dark:hover:text-brand-400 transition-colors"
+        >
+          See all →
+        </Link>
+      </p>
+    </div>
   )
 }
 
@@ -227,43 +183,21 @@ const WHY_ITEMS = [
 ]
 
 function WhySection() {
-  const [expanded, setExpanded] = useState(false)
-
   return (
     <section className="py-12 px-4 max-md:py-5">
       <div className="max-w-5xl mx-auto">
-        {/* Mobile: collapsible trigger */}
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          className="md:hidden w-full flex items-center justify-between gap-3
-                     glass p-4 rounded-2xl text-left font-bold text-slate-800 dark:text-slate-100"
-          aria-expanded={expanded}
-        >
-          <span>Why Choose FAiND?</span>
-          {expanded
-            ? <ChevronUp className="w-5 h-5 shrink-0 text-slate-500" aria-hidden />
-            : <ChevronDown className="w-5 h-5 shrink-0 text-slate-500" aria-hidden />}
-        </button>
-
-        <div
-          className={`md:contents overflow-hidden transition-all duration-300 ease-in-out
-            ${expanded ? 'max-h-[2000px] opacity-100 mt-4' : 'max-h-0 opacity-0'}
-            md:max-h-none md:opacity-100 md:mt-0`}
-        >
-          <h2 className="hidden md:block text-2xl font-bold text-center text-slate-800 dark:text-slate-100 mb-8">
-            Why Choose FAiND?
-          </h2>
-          <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4 max-md:gap-2">
-            {WHY_ITEMS.map((item) => (
-              <div key={item.title}
-                   className="glass p-5 max-md:p-3 rounded-2xl max-md:rounded-xl flex flex-col gap-2 max-md:gap-1.5 text-center hover:shadow-md transition-shadow">
-                <item.Icon className="w-8 h-8 max-md:w-6 max-md:h-6 mx-auto text-brand-600 dark:text-brand-400" aria-hidden />
-                <h3 className="text-sm max-md:text-xs font-bold text-slate-800 dark:text-slate-100">{item.title}</h3>
-                <p className="text-xs max-md:text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">{item.desc}</p>
-              </div>
-            ))}
-          </div>
+        <h2 className="text-2xl max-md:text-lg font-bold text-center text-slate-800 dark:text-slate-100 mb-8 max-md:mb-4">
+          Why Choose FAiND?
+        </h2>
+        <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4 max-md:gap-2">
+          {WHY_ITEMS.map((item) => (
+            <div key={item.title}
+                 className="glass p-5 max-md:p-3 rounded-2xl max-md:rounded-xl flex flex-col gap-2 max-md:gap-1.5 text-center hover:shadow-md transition-shadow">
+              <item.Icon className="w-8 h-8 max-md:w-6 max-md:h-6 mx-auto text-brand-600 dark:text-brand-400" aria-hidden />
+              <h3 className="text-sm max-md:text-xs font-bold text-slate-800 dark:text-slate-100">{item.title}</h3>
+              <p className="text-xs max-md:text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">{item.desc}</p>
+            </div>
+          ))}
         </div>
       </div>
     </section>
@@ -279,7 +213,8 @@ function SafetyBanner() {
                     flex items-start gap-3">
       <AlertTriangle className="w-5 h-5 max-md:w-4 max-md:h-4 flex-shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" aria-hidden />
       <p className="text-xs max-md:text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
-        <strong>Safety reminder:</strong> Never share personal financial information, or passwords during public
+        <strong>Safety reminder:</strong> Always arrange item pick-ups in public, well-lit areas on campus.
+        Never share personal financial information, passwords, or meet off-campus with strangers.
         Report suspicious behaviour to campus security or flag the post using the report button.
       </p>
     </div>
@@ -292,6 +227,12 @@ export default function HomePage() {
   const { isAuthenticated, authReady, user } = useAuth()
   const navigate = useNavigate()
   const [previewTab, setPreviewTab] = useState('lost')
+
+  const { data: matchData } = useQuery({
+    queryKey: ['my-matches'],
+    queryFn: getMyMatches,
+    enabled: isAuthenticated && authReady,
+  })
 
   const { data: homepageData, isLoading, isError, refetch } = useQuery({
     queryKey: ['homepage'],
@@ -306,7 +247,7 @@ export default function HomePage() {
   })
 
   function handleCTA(path) {
-    if (path === '/report/found' || isAuthenticated) {
+    if (isAuthenticated) {
       navigate(path)
     } else {
       navigate('/login', { state: { from: path } })
@@ -423,7 +364,16 @@ export default function HomePage() {
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 max-md:grid-cols-1 gap-3 max-md:gap-2.5">
                   {homepageData.latest_lost.map((item) => (
-                    <ItemCard key={item.id} item={item} viewerUserId={user?.id} />
+                    <ItemCard
+                      key={item.id}
+                      item={item}
+                      viewerBadge={getViewerBadge(
+                        item,
+                        user?.id,
+                        matchData?.matches,
+                        { homepage: true },
+                      )}
+                    />
                   ))}
                 </div>
               )}
@@ -443,7 +393,16 @@ export default function HomePage() {
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 max-md:grid-cols-1 gap-3 max-md:gap-2.5">
                   {homepageData.latest_found.map((item) => (
-                    <ItemCard key={item.id} item={item} viewerUserId={user?.id} />
+                    <ItemCard
+                      key={item.id}
+                      item={item}
+                      viewerBadge={getViewerBadge(
+                        item,
+                        user?.id,
+                        matchData?.matches,
+                        { homepage: true },
+                      )}
+                    />
                   ))}
                 </div>
               )}
@@ -455,10 +414,7 @@ export default function HomePage() {
 
       {/* ── Recently Returned teaser (Section 16.6) ─────────────────────── */}
       {!isLoading && (
-        <RecentlyReturnedTeaser
-          count={homepageData?.recently_returned_count ?? 0}
-          items={homepageData?.recently_returned ?? []}
-        />
+        <RecentlyReturnedTeaser count={homepageData?.recently_returned_count ?? 0} />
       )}
 
       {/* ── Why FAiND ────────────────────────────────────────────────────── */}

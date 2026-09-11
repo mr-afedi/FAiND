@@ -1,9 +1,9 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings
 from functools import lru_cache
+from typing import Optional
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True, extra="ignore")
     # Application
     APP_NAME: str = "FAiND"
     APP_ENV: str = "development"
@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     # Admin dashboard secret path segment (Section 26.1) — e.g. "ops-7f3a"
     ADMIN_SECRET_PATH: str = ""
 
+    # Paystack
+    PAYSTACK_SECRET_KEY: str = ""
+    PAYSTACK_PUBLIC_KEY: str = ""
+
     # Web Push (VAPID)
     VAPID_PRIVATE_KEY: str = ""
     VAPID_PUBLIC_KEY: str = ""
@@ -61,6 +65,10 @@ class Settings(BaseSettings):
     RATE_LIMIT_REGISTER: str = "10/minute"
     RATE_LIMIT_VERIFY_EMAIL: str = "10/minute"
     RATE_LIMIT_RESEND_CODE: str = "3/minute"
+
+    class Config:
+        env_file = ".env"
+        case_sensitive = True
 
 
 @lru_cache()

@@ -14,19 +14,7 @@ from app.models.user import User, UserRole, AccountStatus
 from app.services import notification_service
 
 ADMIN_SECTIONS = frozenset(
-    {
-        "claims",
-        "disputes",
-        "reports",
-        "posts",
-        "users",
-        "logs",
-        "authorities",
-        "supervisors",
-        "redemption",
-        "returned",
-        "drop_points",
-    }
+    {"claims", "disputes", "reports", "fraud", "posts", "users", "logs"}
 )
 
 
@@ -40,7 +28,7 @@ def _active_admins(db: Session) -> list[User]:
     return (
         db.query(User)
         .filter(
-            User.role == UserRole.ROOT_ADMIN,
+            User.role.in_((UserRole.ROOT_ADMIN, UserRole.ASSISTANT_ROOT_ADMIN)),
             User.status == AccountStatus.ACTIVE,
         )
         .all()
@@ -54,10 +42,7 @@ def notify_all_admins(
     body: str,
     link: str,
     reference_id: uuid.UUID,
-    send_push: bool = False,
 ) -> None:
-    from app.services import push_service
-
     for admin in _active_admins(db):
         notification_service.create_notification(
             db,
@@ -68,23 +53,7 @@ def notify_all_admins(
             link=link,
             reference_id=reference_id,
         )
-        if send_push:
-            push_service.send_push_to_admin(
-                db,
-                admin_user_id=admin.id,
-                title=title,
-                body=body,
-                url=_admin_push_url(link),
-            )
     db.flush()
-
-
-def _admin_push_url(link: str) -> str:
-    if link.startswith("admin:"):
-        parts = link.split(":")
-        if len(parts) >= 2:
-            return f"/admin?section={parts[1]}"
-    return "/admin"
 
 
 def notify_admins_claim_in_review(
@@ -182,164 +151,4 @@ def notify_admins_report_escalated(
         ),
         link=f"admin:reports:{report_type}:{report_id}",
         reference_id=report_id,
-    )
-
-
-def notify_admins_new_claim(
-    db: Session,
-    *,
-    claim_id: uuid.UUID,
-    found_item_id: uuid.UUID,
-    drop_point_name: str,
-    path: str,
-) -> None:
-    notify_all_admins(
-        db,
-        title="New claim submitted",
-        body=(
-            f"A Path {path} claim was submitted for an item at {drop_point_name}. "
-            "Review the claims overview."
-        ),
-        link=admin_link("claims", found_item_id),
-        reference_id=claim_id,
-    )
-
-
-def notify_admins_item_overdue(
-    db: Session,
-    *,
-    item_id: uuid.UUID,
-    drop_point_name: str,
-) -> None:
-    notify_all_admins(
-        db,
-        title="Item overdue for drop-off",
-        body=(
-            f"A found item at {drop_point_name} passed the 48-hour drop-off deadline "
-            "without being received."
-        ),
-        link=admin_link("posts", item_id),
-        reference_id=item_id,
-        send_push=True,
-    )
-
-
-def notify_admins_item_unconfirmed(
-    db: Session,
-    *,
-    item_id: uuid.UUID,
-    drop_point_name: str,
-) -> None:
-    notify_all_admins(
-        db,
-        title="Item unconfirmed after 72 hours",
-        body=(
-            f"A found item at {drop_point_name} was hidden as UNCONFIRMED after 72 hours "
-            "with no drop-off."
-        ),
-        link=admin_link("posts", item_id),
-        reference_id=item_id,
-        send_push=True,
-    )
-
-
-def notify_admins_handover_override(
-    db: Session,
-    *,
-    handover_id: uuid.UUID,
-    item_id: uuid.UUID,
-    drop_point_name: str,
-) -> None:
-    notify_all_admins(
-        db,
-        title="Authority handover override",
-        body=(
-            f"An authority at {drop_point_name} completed a handover without owner "
-            "digital sign-off. Review the admin log for details."
-        ),
-        link=admin_link("logs", handover_id),
-        reference_id=item_id,
-        send_push=True,
-    )
-
-
-def notify_admins_redemption_used(
-    db: Session,
-    *,
-    redemption_code_id: uuid.UUID,
-    code: str,
-    token_amount: int,
-) -> None:
-    notify_all_admins(
-        db,
-        title="Redemption code used",
-        body=f"Redemption code {code} was redeemed for {token_amount} tokens.",
-        link=admin_link("redemption", redemption_code_id),
-        reference_id=redemption_code_id,
-    )
-
-
-def notify_admins_authority_created(
-    db: Session,
-    *,
-    authority_id: uuid.UUID,
-    email: str,
-    drop_point_name: str,
-) -> None:
-    notify_all_admins(
-        db,
-        title="Authority account created",
-        body=f"New authority account {email} was created for {drop_point_name}.",
-        link=admin_link("authorities", authority_id),
-        reference_id=authority_id,
-        send_push=True,
-    )
-
-
-def notify_admins_authority_deactivated(
-    db: Session,
-    *,
-    authority_id: uuid.UUID,
-    email: str,
-    drop_point_name: str,
-) -> None:
-    notify_all_admins(
-        db,
-        title="Authority account deactivated",
-        body=f"Authority account {email} at {drop_point_name} was deactivated.",
-        link=admin_link("authorities", authority_id),
-        reference_id=authority_id,
-        send_push=True,
-    )
-
-
-def notify_admins_supervisor_created(
-    db: Session,
-    *,
-    supervisor_id: uuid.UUID,
-    email: str,
-) -> None:
-    notify_all_admins(
-        db,
-        title="Supervisor account created",
-        body=f"A new drop point supervisor account was created: {email}.",
-        link=admin_link("supervisors", supervisor_id),
-        reference_id=supervisor_id,
-        send_push=True,
-    )
-
-
-def notify_admins_supervisor_modified(
-    db: Session,
-    *,
-    supervisor_id: uuid.UUID,
-    email: str,
-) -> None:
-    notify_all_admins(
-        db,
-        title="Supervisor account updated",
-        body=f"Supervisor account {email} was updated.",
-        link=admin_link("supervisors", supervisor_id),
-        reference_id=supervisor_id,
-        send_push=True,
     )

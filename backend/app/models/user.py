@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
-from sqlalchemy import String, Boolean, DateTime, Text, ForeignKey, Enum
+from sqlalchemy import String, Boolean, DateTime, Integer, Text, ForeignKey, Enum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.core.database import Base
@@ -10,6 +10,7 @@ from app.core.database import Base
 class UserRole(str, PyEnum):
     USER = "user"
     UNIVERSITY_ADMIN = "university_admin"
+    ASSISTANT_ROOT_ADMIN = "assistant_root_admin"
     ROOT_ADMIN = "root_admin"
 
 
@@ -40,6 +41,7 @@ class User(Base):
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Status & role
+    # values_callable ensures SQLAlchemy uses enum VALUES (lowercase) not NAMES
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole, values_callable=lambda x: [e.value for e in x]),
         default=UserRole.USER, nullable=False
@@ -49,6 +51,12 @@ class User(Base):
         default=AccountStatus.UNVERIFIED, nullable=False
     )
 
+    # Trust & fraud
+    trust_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    fraud_risk_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    fraud_verification_override: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     reports_suppressed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Settings

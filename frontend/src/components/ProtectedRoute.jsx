@@ -1,6 +1,7 @@
 import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 
+// Session-storage key used to survive a browser refresh of the login page
 const REDIRECT_KEY = 'faind_login_redirect'
 
 export default function ProtectedRoute({ children }) {
@@ -17,6 +18,7 @@ export default function ProtectedRoute({ children }) {
   }
 
   if (!isAuthenticated) {
+    // Persist the intended path so it survives a login-page refresh
     sessionStorage.setItem(REDIRECT_KEY, location.pathname)
     return <Navigate to="/login" state={{ from: location }} replace />
   }

@@ -1,21 +1,58 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from app.models.item import ItemCategory, ItemStatus, ItemType
-from app.schemas.drop_off import DropOffInfo
-from app.schemas.token import TokenEscrowInfo
-from app.schemas.claim import ViewerClaimSummary
+
+
+# ── Hidden Q&A ──────────────────────────────────────────────────────────────
+
+class HiddenQuestionInput(BaseModel):
+    question: str
+    answer: str
+
+    @field_validator("question")
+    @classmethod
+    def question_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Question cannot be empty")
+        if len(v) > 300:
+            raise ValueError("Question must be 300 characters or fewer")
+        return v
+
+    @field_validator("answer")
+    @classmethod
+    def answer_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Answer cannot be empty")
+        if len(v) > 300:
+            raise ValueError("Answer must be 300 characters or fewer")
+        return v
+
+
+class HiddenQuestionPublic(BaseModel):
+    """Finder's questions shown to the owner during verification; answers are NEVER returned."""
+    id: uuid.UUID
+    position: int
+    question: str  # decrypted question text, only sent to the item owner
+
+    model_config = {"from_attributes": True}
 
 
 # ── Lost Item Request ────────────────────────────────────────────────────────
 
 class CreateLostItemRequest(BaseModel):
+    """
+    Lost items: owner sets hidden verification Q&A (Section 6, V4.3).
+    """
     category: ItemCategory
     public_description: str
     location_id: Optional[uuid.UUID] = None
     date_occurred: datetime
     image_urls: list[str] = []
+    hidden_questions: list[HiddenQuestionInput]
 
     @field_validator("public_description")
     @classmethod
@@ -27,6 +64,15 @@ class CreateLostItemRequest(BaseModel):
             raise ValueError("Public description must be 1000 characters or fewer")
         return v
 
+    @field_validator("hidden_questions")
+    @classmethod
+    def validate_questions(cls, v: list[HiddenQuestionInput]) -> list[HiddenQuestionInput]:
+        if len(v) < 2:
+            raise ValueError("At least 2 hidden verification questions are required")
+        if len(v) > 3:
+            raise ValueError("Maximum 3 hidden verification questions allowed")
+        return v
+
     @field_validator("image_urls")
     @classmethod
     def validate_image_urls(cls, v: list[str]) -> list[str]:
@@ -34,11 +80,14 @@ class CreateLostItemRequest(BaseModel):
             raise ValueError("Maximum 2 images allowed")
         for url in v:
             if not ("cloudinary.com" in url or "res.cloudinary.com" in url):
-                raise ValueError("Invalid image URL — only Cloudinary URLs are accepted")
+                raise ValueError(f"Invalid image URL — only Cloudinary URLs are accepted")
         return v
 
 
+# ── Patch / Edit ─────────────────────────────────────────────────────────────
+
 class UpdateLostItemRequest(BaseModel):
+    """Only public-facing fields may be edited. Encrypted fields are immutable."""
     category: Optional[ItemCategory] = None
     public_description: Optional[str] = None
     location_id: Optional[uuid.UUID] = None
@@ -68,15 +117,19 @@ class UpdateLostItemRequest(BaseModel):
         return v
 
 
+# ── Responses ────────────────────────────────────────────────────────────────
+
 class ItemPosterSummary(BaseModel):
     id: uuid.UUID
     display_name: str
     username: str
+    trust_tier: str = "New Member"
 
     model_config = {"from_attributes": True}
 
 
 class LostItemPublicResponse(BaseModel):
+    """Returned for any authenticated user viewing an item (public fields only)."""
     id: uuid.UUID
     item_type: ItemType
     status: ItemStatus
@@ -91,19 +144,37 @@ class LostItemPublicResponse(BaseModel):
     extensions_used: int
     created_at: datetime
     posted_by: ItemPosterSummary
-    viewer_claim: Optional[ViewerClaimSummary] = None
+    # Path B claim state for the requesting user (lost items only; Section V4.3)
+    viewer_path_b_status: Optional[str] = None  # under_review | approved | rejected | exhausted
+    viewer_path_b_conversation_id: Optional[uuid.UUID] = None
+    viewer_path_c_status: Optional[str] = None  # under_review | approved | exhausted
+    viewer_path_c_conversation_id: Optional[uuid.UUID] = None
 
     model_config = {"from_attributes": True}
 
 
 class LostItemOwnerResponse(LostItemPublicResponse):
+    """Extended response for the item owner; hidden answers are never included."""
+
+    warnings: list[str] = []
     already_submitted: bool = False
     message: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
 
+class CheckHiddenAnswersRequest(BaseModel):
+    """Optional pre-submit check for obvious hidden answers (V4.3 §6.1)."""
+    public_description: str
+    hidden_questions: list[HiddenQuestionInput]
+
+
+class CheckHiddenAnswersResponse(BaseModel):
+    warnings: list[str] = []
+
+
 class LostItemListItem(BaseModel):
+    """Lightweight row for dashboard listing."""
     id: uuid.UUID
     category: ItemCategory
     status: ItemStatus
@@ -127,19 +198,23 @@ class CampusZoneOption(BaseModel):
     name: str
     latitude: float
     longitude: float
-    university_id: uuid.UUID
 
     model_config = {"from_attributes": True}
 
 
+# ── Found Item schemas (Feature D) ───────────────────────────────────────────
+
 class CreateFoundItemRequest(BaseModel):
+    """
+    Found items: finder sets hidden verification Q&A (Section 7, V4.2).
+    At least one image is mandatory.
+    """
     category: ItemCategory
     public_description: str
-    location_id: uuid.UUID
+    location_id: Optional[uuid.UUID] = None
     date_occurred: datetime
-    image_urls: list[str]
-    drop_point_id: Optional[uuid.UUID] = None
-    escrow_token: Optional[str] = None
+    image_urls: list[str]  # min 1 required, max 2
+    hidden_questions: list[HiddenQuestionInput]
 
     @field_validator("public_description")
     @classmethod
@@ -155,7 +230,7 @@ class CreateFoundItemRequest(BaseModel):
     @classmethod
     def validate_image_urls(cls, v: list[str]) -> list[str]:
         if len(v) < 1:
-            raise ValueError("At least one photo is required for found items")
+            raise ValueError("At least one photo is required for found items (Section 7)")
         if len(v) > 2:
             raise ValueError("Maximum 2 images allowed")
         for url in v:
@@ -163,8 +238,18 @@ class CreateFoundItemRequest(BaseModel):
                 raise ValueError("Invalid image URL — only Cloudinary URLs are accepted")
         return v
 
+    @field_validator("hidden_questions")
+    @classmethod
+    def validate_questions(cls, v: list[HiddenQuestionInput]) -> list[HiddenQuestionInput]:
+        if len(v) < 2:
+            raise ValueError("At least 2 hidden verification questions are required")
+        if len(v) > 3:
+            raise ValueError("Maximum 3 hidden verification questions allowed")
+        return v
+
 
 class UpdateFoundItemRequest(BaseModel):
+    """Only public-facing fields may be edited."""
     category: Optional[ItemCategory] = None
     public_description: Optional[str] = None
     location_id: Optional[uuid.UUID] = None
@@ -196,45 +281,12 @@ class UpdateFoundItemRequest(BaseModel):
         return v
 
 
+# Found items: hidden Q&A never exposed in any API response (Section 7.2)
 FoundItemPublicResponse = LostItemPublicResponse
-
-
-class FoundItemCreateResponse(BaseModel):
-    id: uuid.UUID
-    item_type: ItemType
-    status: ItemStatus
-    category: ItemCategory
-    public_description: str
-    location_label: str
-    location_lat: Optional[float]
-    location_lng: Optional[float]
-    date_occurred: datetime
-    image_urls: list[str]
-    expiry_date: datetime
-    extensions_used: int
-    created_at: datetime
-    tracking_reference: str
-    drop_point_id: uuid.UUID
-    drop_point_name: str
-    instruction_message: str
-    can_edit: bool
-    edit_window_ends_at: datetime
-    drop_off: DropOffInfo
-    token_escrow: TokenEscrowInfo
-
-    model_config = {"from_attributes": True}
-
-
-class FoundItemTrackResponse(FoundItemCreateResponse):
-    minutes_remaining: int
-
-    model_config = {"from_attributes": True}
-
-
 FoundItemOwnerResponse = LostItemPublicResponse
 
-
 class FoundItemListItem(BaseModel):
+    """Lightweight row for dashboard listing."""
     id: uuid.UUID
     category: ItemCategory
     status: ItemStatus
@@ -253,15 +305,20 @@ class FoundItemListResponse(BaseModel):
     total: int
 
 
+# ── Public browse schemas (Feature F) ────────────────────────────────────────
+
 class BrowseItemPoster(BaseModel):
+    """Poster info for the public feed — tier label only, no raw score (Section 17.2)."""
     id: uuid.UUID
     username: str
     display_name: str
+    trust_tier: str
 
     model_config = {"from_attributes": True}
 
 
 class BrowseItemCard(BaseModel):
+    """Public card shown on /lost, /found, and homepage previews."""
     id: uuid.UUID
     item_type: ItemType
     status: ItemStatus
@@ -273,7 +330,11 @@ class BrowseItemCard(BaseModel):
     created_at: datetime
     updated_at: datetime
     posted_by: BrowseItemPoster
-    viewer_claim: Optional[ViewerClaimSummary] = None
+    viewer_path_b_status: Optional[str] = None
+    viewer_path_b_conversation_id: Optional[uuid.UUID] = None
+    viewer_path_c_status: Optional[str] = None
+    viewer_path_c_conversation_id: Optional[uuid.UUID] = None
+    viewer_chat_unlocked: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -286,6 +347,7 @@ class BrowseListResponse(BaseModel):
 
 
 class RecentlyReturnedItem(BaseModel):
+    """Anonymous resolved-item summary for the homepage (Section 16.6)."""
     id: uuid.UUID
     category: ItemCategory
     returned_at: datetime
@@ -295,11 +357,13 @@ class RecentlyReturnedItem(BaseModel):
 
 
 class PublicReturnedItem(BaseModel):
+    """Anonymous returned item for public /returned page (Section 16.6)."""
     id: uuid.UUID
     category: ItemCategory
     item_name: str
     returned_at: datetime
     university_short_name: str
+    finder_tipped: bool = False
 
     model_config = {"from_attributes": True}
 

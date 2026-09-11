@@ -10,12 +10,11 @@ export function invalidateAfterAuthSession(queryClient) {
   queryClient.invalidateQueries({ queryKey: ['browse'] })
   queryClient.invalidateQueries({ queryKey: ['my-matches'] })
   queryClient.invalidateQueries({ queryKey: ['my-matches-for-item'] })
-  queryClient.invalidateQueries({ queryKey: ['my-claims'] })
-  queryClient.invalidateQueries({ queryKey: ['my-awaiting-confirmation'] })
   queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
   queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
+  queryClient.invalidateQueries({ queryKey: ['messages-unread-count'] })
+  queryClient.invalidateQueries({ queryKey: ['conversations'] })
   queryClient.invalidateQueries({ queryKey: ['me'] })
-  queryClient.invalidateQueries({ queryKey: ['my-tokens'] })
 }
 
 export function invalidateAfterItemCreate(queryClient, { type = 'lost' } = {}) {
@@ -23,66 +22,6 @@ export function invalidateAfterItemCreate(queryClient, { type = 'lost' } = {}) {
   queryClient.invalidateQueries({ queryKey: ['homepage'] })
   queryClient.invalidateQueries({ queryKey: ['browse'] })
   queryClient.invalidateQueries({ queryKey: ['my-matches'] })
-  if (type === 'found') {
-    queryClient.invalidateQueries({ queryKey: ['authority-incoming'] })
-  }
-}
-
-export function invalidateAfterClaimSubmit(queryClient, { foundItemId } = {}) {
-  queryClient.invalidateQueries({ queryKey: ['my-claims'] })
-  queryClient.invalidateQueries({ queryKey: ['my-awaiting-confirmation'] })
-  queryClient.invalidateQueries({ queryKey: ['authority-claims-list'] })
-  queryClient.invalidateQueries({ queryKey: ['supervisor-claims-list'] })
-  if (foundItemId) {
-    queryClient.invalidateQueries({ queryKey: ['item', foundItemId] })
-    queryClient.invalidateQueries({ queryKey: ['authority-claims', foundItemId] })
-    queryClient.invalidateQueries({ queryKey: ['supervisor-claims', foundItemId] })
-  }
-}
-
-export function invalidateAfterDropOff(queryClient, { itemId, trackingRef } = {}) {
-  queryClient.invalidateQueries({ queryKey: ['authority-incoming'] })
-  queryClient.invalidateQueries({ queryKey: ['authority-at-droppoint'] })
-  if (itemId) {
-    queryClient.invalidateQueries({ queryKey: ['item', itemId] })
-  }
-  if (trackingRef) {
-    queryClient.invalidateQueries({ queryKey: ['found-track', trackingRef] })
-  }
-}
-
-export function invalidateAfterAuthorityClaimAction(queryClient, { foundItemId, claimId } = {}) {
-  queryClient.invalidateQueries({ queryKey: ['authority-claims-list'] })
-  queryClient.invalidateQueries({ queryKey: ['my-claims'] })
-  queryClient.invalidateQueries({ queryKey: ['my-awaiting-confirmation'] })
-  if (foundItemId) {
-    queryClient.invalidateQueries({ queryKey: ['item', foundItemId] })
-    queryClient.invalidateQueries({ queryKey: ['authority-claims', foundItemId] })
-  }
-  if (claimId) {
-    queryClient.invalidateQueries({ queryKey: ['claim-status', claimId] })
-  }
-}
-
-export function invalidateAfterHandover(queryClient, { handoverId, foundItemId } = {}) {
-  queryClient.invalidateQueries({ queryKey: ['authority-handover-queue'] })
-  queryClient.invalidateQueries({ queryKey: ['my-claims'] })
-  queryClient.invalidateQueries({ queryKey: ['my-awaiting-confirmation'] })
-  queryClient.invalidateQueries({ queryKey: ['my-returns'] })
-  queryClient.invalidateQueries({ queryKey: ['homepage'] })
-  queryClient.invalidateQueries({ queryKey: ['public-returned'] })
-  queryClient.invalidateQueries({ queryKey: ['admin-returned'] })
-  if (handoverId) {
-    queryClient.invalidateQueries({ queryKey: ['handover', handoverId] })
-  }
-  if (foundItemId) {
-    queryClient.invalidateQueries({ queryKey: ['item', foundItemId] })
-  }
-}
-
-export function invalidateAfterNotificationChange(queryClient) {
-  queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
-  queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
 }
 
 export function invalidateAfterItemChange(queryClient, itemId) {
@@ -92,11 +31,64 @@ export function invalidateAfterItemChange(queryClient, itemId) {
   queryClient.invalidateQueries({ queryKey: ['browse'] })
   queryClient.invalidateQueries({ queryKey: ['my-matches'] })
   queryClient.invalidateQueries({ queryKey: ['my-matches-for-item'] })
-  queryClient.invalidateQueries({ queryKey: ['my-claims'] })
-  queryClient.invalidateQueries({ queryKey: ['my-awaiting-confirmation'] })
   if (itemId) {
     queryClient.invalidateQueries({ queryKey: ['item', itemId] })
   }
+}
+
+export function invalidateAfterPathC(queryClient, { foundItemId, matchId } = {}) {
+  queryClient.invalidateQueries({ queryKey: ['my-matches'] })
+  queryClient.invalidateQueries({ queryKey: ['my-matches-for-item'] })
+  queryClient.invalidateQueries({ queryKey: ['homepage'] })
+  queryClient.invalidateQueries({ queryKey: ['browse'] })
+  queryClient.invalidateQueries({ queryKey: ['path-c-form', foundItemId] })
+  if (foundItemId) {
+    queryClient.invalidateQueries({ queryKey: ['item', foundItemId] })
+  }
+  queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
+  queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
+  markPushPromptReady()
+  if (matchId) {
+    queryClient.invalidateQueries({ queryKey: ['path-a-form', matchId] })
+  }
+}
+
+export function invalidateAfterPathB(queryClient, { lostItemId, matchId } = {}) {
+  queryClient.invalidateQueries({ queryKey: ['my-matches'] })
+  queryClient.invalidateQueries({ queryKey: ['my-matches-for-item'] })
+  queryClient.invalidateQueries({ queryKey: ['homepage'] })
+  queryClient.invalidateQueries({ queryKey: ['browse'] })
+  queryClient.invalidateQueries({ queryKey: ['path-b-form', lostItemId] })
+  if (lostItemId) {
+    queryClient.invalidateQueries({ queryKey: ['item', lostItemId] })
+  }
+  queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
+  queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
+  markPushPromptReady()
+  if (matchId) {
+    queryClient.invalidateQueries({ queryKey: ['path-a-form', matchId] })
+  }
+}
+
+export function invalidateAfterVerification(queryClient, { lostItemId, foundItemId, matchId } = {}) {
+  queryClient.invalidateQueries({ queryKey: ['my-matches'] })
+  queryClient.invalidateQueries({ queryKey: ['my-matches-for-item'] })
+  queryClient.invalidateQueries({ queryKey: ['homepage'] })
+  queryClient.invalidateQueries({ queryKey: ['browse'] })
+  if (matchId) {
+    queryClient.invalidateQueries({ queryKey: ['path-a-form', matchId] })
+    queryClient.invalidateQueries({ queryKey: ['path-a-status', matchId] })
+  }
+  if (lostItemId) {
+    queryClient.invalidateQueries({ queryKey: ['item', lostItemId] })
+  }
+  if (foundItemId) {
+    queryClient.invalidateQueries({ queryKey: ['item', foundItemId] })
+  }
+  queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
+  queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
+  queryClient.invalidateQueries({ queryKey: ['my-trust-events'] })
+  markPushPromptReady()
 }
 
 export function invalidateAfterProfileUpdate(queryClient) {
@@ -113,12 +105,10 @@ export function invalidateAfterReturn(queryClient, { matchId, returnId, lostItem
   queryClient.invalidateQueries({ queryKey: ['my-found-items'] })
   queryClient.invalidateQueries({ queryKey: ['my-matches'] })
   queryClient.invalidateQueries({ queryKey: ['my-matches-for-item'] })
-  queryClient.invalidateQueries({ queryKey: ['my-claims'] })
-  queryClient.invalidateQueries({ queryKey: ['my-awaiting-confirmation'] })
+  queryClient.invalidateQueries({ queryKey: ['my-trust-events'] })
   queryClient.invalidateQueries({ queryKey: ['me'] })
   queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
   queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
-  markPushPromptReady()
   if (matchId) {
     queryClient.invalidateQueries({ queryKey: ['return-status', matchId] })
   }

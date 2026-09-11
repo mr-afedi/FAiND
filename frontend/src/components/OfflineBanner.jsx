@@ -17,7 +17,7 @@ export default function OfflineBanner() {
       aria-live="polite"
     >
       <WifiOff className="w-4 h-4 shrink-0" aria-hidden />
-      You are offline — items and matches need a live connection.
+      You are offline — items, matches, and messages need a live connection.
     </div>
   )
 }

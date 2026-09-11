@@ -14,6 +14,8 @@ import { useQuery } from '@tanstack/react-query'
 import NavBar from './NavBar'
 import ItemCard from './ItemCard'
 import { browseItems, getPublicCampusZones } from '../services/itemService'
+import { getMyMatches } from '../services/matchService'
+import { getViewerBadge } from '../utils/viewerItemBadges'
 import { useAuth } from '../context/AuthContext'
 import CategoryFilterGrid from './CategoryFilterGrid'
 import {
@@ -106,6 +108,12 @@ export default function BrowsePage({ defaultType }) {
     queryFn: () => browseItems(queryParams),
     enabled: authReady,
     keepPreviousData: true,
+  })
+
+  const { data: matchData } = useQuery({
+    queryKey: ['my-matches'],
+    queryFn: getMyMatches,
+    enabled: isAuthenticated && authReady,
   })
 
   // ── Accumulated items for Load More ─────────────────────────────────────────
@@ -336,7 +344,16 @@ export default function BrowsePage({ defaultType }) {
             {/* Card grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 max-md:gap-2.5">
               {allItems.map((item) => (
-                <ItemCard key={item.id} item={item} viewerUserId={user?.id} />
+                <ItemCard
+                  key={item.id}
+                  item={item}
+                  viewerBadge={getViewerBadge(
+                    item,
+                    user?.id,
+                    matchData?.matches,
+                    { browse: true },
+                  )}
+                />
               ))}
             </div>
 

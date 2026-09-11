@@ -31,17 +31,6 @@ class AdminActionType(str, PyEnum):
     LOCK_ITEM = "lock_item"
     ESCALATE_DISPUTE = "escalate_dispute"
     OPEN_MANUAL_DISPUTE = "open_manual_dispute"
-    TOKEN_SETTINGS_UPDATE = "token_settings_update"
-    REDEMPTION_REDEEMED = "redemption_redeemed"
-    DROP_POINT_CREATE = "drop_point_create"
-    DROP_POINT_UPDATE = "drop_point_update"
-    AUTHORITY_CREATE = "authority_create"
-    AUTHORITY_ACTIVATE = "authority_activate"
-    AUTHORITY_DEACTIVATE = "authority_deactivate"
-    AUTHORITY_REASSIGN = "authority_reassign"
-    SUPERVISOR_CREATE = "supervisor_create"
-    SUPERVISOR_UPDATE = "supervisor_update"
-    HANDOVER_OVERRIDE = "handover_override"
 
 
 class AdminLog(Base):

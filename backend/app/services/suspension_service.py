@@ -2,7 +2,7 @@
 Suspension system — Section 4.7, Feature T.
 
 Canonical entry point for admin suspend/unsuspend side effects:
-item hiding, match pausing, push deactivation, notifications.
+item hiding, match pausing, chat freezing, push deactivation, notifications.
 """
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.admin_log import AdminActionType
+from app.models.conversation import Conversation, ConversationStatus
 from app.models.item import Item, ItemStatus
 from app.models.potential_match import PotentialMatch, PotentialMatchStatus
 from app.models.push_subscription import PushSubscription
@@ -100,6 +101,44 @@ def _pause_user_matches(db: Session, user_id: uuid.UUID) -> int:
     return len(matches)
 
 
+def _freeze_user_conversations(db: Session, user_id: uuid.UUID) -> int:
+    """Section 4.7 / 14.6 — freeze open chats involving the suspended user."""
+    convs = (
+        db.query(Conversation)
+        .filter(
+            or_(
+                Conversation.lost_owner_id == user_id,
+                Conversation.found_owner_id == user_id,
+            ),
+            Conversation.status == ConversationStatus.UNLOCKED,
+        )
+        .all()
+    )
+    for conv in convs:
+        conv.status = ConversationStatus.PAUSED
+        conv.frozen_for_suspension = True
+    return len(convs)
+
+
+def _unfreeze_user_conversations(db: Session, user_id: uuid.UUID) -> int:
+    """Section 4.7 — restore chats frozen specifically for suspension."""
+    convs = (
+        db.query(Conversation)
+        .filter(
+            or_(
+                Conversation.lost_owner_id == user_id,
+                Conversation.found_owner_id == user_id,
+            ),
+            Conversation.frozen_for_suspension.is_(True),
+        )
+        .all()
+    )
+    for conv in convs:
+        conv.status = ConversationStatus.UNLOCKED
+        conv.frozen_for_suspension = False
+    return len(convs)
+
+
 def _set_push_subscriptions_active(db: Session, user_id: uuid.UUID, *, active: bool) -> int:
     """Section 4.7 — temporarily deactivate / reactivate Web Push subscriptions."""
     subs = (
@@ -110,6 +149,35 @@ def _set_push_subscriptions_active(db: Session, user_id: uuid.UUID, *, active: b
     for sub in subs:
         sub.is_active = active
     return len(subs)
+
+
+def _notify_conversation_partners(db: Session, user_id: uuid.UUID) -> int:
+    """Section 4.7 — alert other parties that chat is paused for review."""
+    convs = (
+        db.query(Conversation)
+        .filter(
+            or_(
+                Conversation.lost_owner_id == user_id,
+                Conversation.found_owner_id == user_id,
+            ),
+            Conversation.frozen_for_suspension.is_(True),
+        )
+        .all()
+    )
+    count = 0
+    for conv in convs:
+        other_id = (
+            conv.found_owner_id
+            if conv.lost_owner_id == user_id
+            else conv.lost_owner_id
+        )
+        notification_service.notify_conversation_paused_suspension(
+            db,
+            recipient_id=other_id,
+            conversation_id=conv.id,
+        )
+        count += 1
+    return count
 
 
 def _resume_user_matches(db: Session, user_id: uuid.UUID) -> int:
@@ -128,7 +196,7 @@ def _resume_user_matches(db: Session, user_id: uuid.UUID) -> int:
 
 
 def _assert_can_suspend(target: User) -> None:
-    if target.role == UserRole.ROOT_ADMIN:
+    if target.role in (UserRole.ROOT_ADMIN, UserRole.ASSISTANT_ROOT_ADMIN):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Cannot suspend an admin account.",
@@ -161,9 +229,11 @@ def suspend_user(
 
     hidden = _hide_user_items(db, target.id)
     paused = _pause_user_matches(db, target.id)
+    frozen = _freeze_user_conversations(db, target.id)
     push_deactivated = _set_push_subscriptions_active(db, target.id, active=False)
 
     notification_service.notify_account_suspended(db, target.id)
+    partners_notified = _notify_conversation_partners(db, target.id)
 
     if log_action:
         log_action(
@@ -178,17 +248,20 @@ def suspend_user(
                 "status_after": "suspended",
                 "items_hidden": hidden,
                 "matches_paused": paused,
+                "conversations_frozen": frozen,
                 "push_subscriptions_deactivated": push_deactivated,
+                "partners_notified": partners_notified,
             },
         )
 
     db.commit()
     db.refresh(target)
     logger.info(
-        "suspend_user: user=%s hidden=%d paused=%d push=%d",
+        "suspend_user: user=%s hidden=%d paused=%d frozen=%d push=%d",
         target.id,
         hidden,
         paused,
+        frozen,
         push_deactivated,
     )
     return target
@@ -213,6 +286,7 @@ def unsuspend_user(
     target.suspended_by_id = None
 
     restored = _restore_user_items(db, target.id)
+    unfrozen = _unfreeze_user_conversations(db, target.id)
     push_reactivated = _set_push_subscriptions_active(db, target.id, active=True)
     resumed = _resume_user_matches(db, target.id)
 
@@ -229,6 +303,7 @@ def unsuspend_user(
                 "status_before": "suspended",
                 "status_after": "active",
                 "items_restored": restored,
+                "conversations_unfrozen": unfrozen,
                 "push_subscriptions_reactivated": push_reactivated,
                 "matches_resumed": resumed,
             },
@@ -237,9 +312,10 @@ def unsuspend_user(
     db.commit()
     db.refresh(target)
     logger.info(
-        "unsuspend_user: user=%s restored=%d push=%d matches=%d",
+        "unsuspend_user: user=%s restored=%d unfrozen=%d push=%d matches=%d",
         target.id,
         restored,
+        unfrozen,
         push_reactivated,
         resumed,
     )

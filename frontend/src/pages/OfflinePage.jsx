@@ -13,7 +13,7 @@ export default function OfflinePage() {
             You are offline
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
-            FAiND needs a live connection for items and matches.
+            FAiND needs a live connection for items, matches, and messages.
             Reconnect to refresh your feed.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">

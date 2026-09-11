@@ -36,6 +36,7 @@ class SubmitPostReportRequest(BaseModel):
 class SubmitUserReportRequest(BaseModel):
     reason: UserReportReason
     detail_text: Optional[str] = None
+    conversation_id: Optional[uuid.UUID] = None
 
     @field_validator("detail_text")
     @classmethod
@@ -58,6 +59,7 @@ class ReportSubmittedResponse(BaseModel):
 class ReportQueueReporter(BaseModel):
     user_id: uuid.UUID
     display_name: str
+    trust_tier: str
     status: str
     reports_suppressed: bool
 
@@ -76,6 +78,7 @@ class ReportQueueItem(BaseModel):
     target_item_description: Optional[str] = None
     target_user_id: Optional[uuid.UUID] = None
     target_user_display_name: Optional[str] = None
+    context_conversation_id: Optional[uuid.UUID] = None
 
 
 class AdminReportsResponse(BaseModel):

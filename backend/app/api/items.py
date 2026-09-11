@@ -16,6 +16,8 @@ from app.models.user import User
 from app.models.item import ItemType, ItemCategory, ItemStatus
 from app.models.campus_zone import CampusZone
 from app.schemas.item import (
+    CheckHiddenAnswersRequest,
+    CheckHiddenAnswersResponse,
     CreateLostItemRequest,
     UpdateLostItemRequest,
     LostItemPublicResponse,
@@ -25,19 +27,21 @@ from app.schemas.item import (
     CreateFoundItemRequest,
     UpdateFoundItemRequest,
     FoundItemListResponse,
-    FoundItemCreateResponse,
-    FoundItemTrackResponse,
     BrowseListResponse,
     HomepageResponse,
     PublicReturnedListResponse,
 )
 import app.services.item_service as item_service
-from app.services import item_interest_service
-from app.services.matching_service import run_matching_background, get_matched_item_ids
-from app.schemas.item_interest import ItemInterestStatusResponse, ItemInterestRegisterResponse
+from app.services.matching_service import (
+    run_matching_background,
+    get_matched_item_ids,
+    get_chat_unlocked_item_ids,
+)
 
 router = APIRouter(prefix="/items", tags=["items"])
 
+
+# ── Campus Zones ─────────────────────────────────────────────────────────────
 
 @router.get("/campus-zones", response_model=list[CampusZoneOption])
 def get_campus_zones(
@@ -59,7 +63,7 @@ def get_campus_zones(
 
 @router.get("/public/campus-zones", response_model=list[CampusZoneOption])
 def get_public_campus_zones(db: Session = Depends(get_db)):
-    """Return all active campus zones — no auth required."""
+    """Return all active campus zones — no auth required (used by public browse filter)."""
     return (
         db.query(CampusZone)
         .filter(CampusZone.is_active == True)
@@ -68,15 +72,21 @@ def get_public_campus_zones(db: Session = Depends(get_db)):
     )
 
 
+# ── Public Browse (Feature F) — defined BEFORE /{item_id} to avoid shadowing ─
+
 @router.get("/public/homepage", response_model=HomepageResponse)
 def get_homepage_data(
     current_user: Optional[User] = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
+    """
+    No auth required. Returns 5 latest lost, 5 latest found, and recently
+    returned items for the homepage (Section 24.1).
+    Authenticated users see POTENTIAL_MATCH status on items they are a party to.
+    """
     matched_ids = get_matched_item_ids(db, current_user.id) if current_user else None
-    return item_service.get_homepage_data(
-        db, viewer_matched_ids=matched_ids, viewer_user=current_user
-    )
+    viewer_id = current_user.id if current_user else None
+    return item_service.get_homepage_data(db, viewer_matched_ids=matched_ids, viewer_id=viewer_id)
 
 
 @router.get("/public/returned", response_model=PublicReturnedListResponse)
@@ -85,6 +95,7 @@ def list_public_returned(
     limit: int = Query(default=50, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
+    """No auth required. Anonymous returned items from the past 7 days (Section 16.6)."""
     return item_service.list_public_returned_items(db, skip=skip, limit=limit)
 
 
@@ -103,10 +114,17 @@ def browse_public(
     current_user: Optional[User]    = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
+    """
+    No auth required. Public filterable browse for /lost and /found pages
+    (Section 24.2). Suspended users' posts are always excluded.
+    Authenticated users see POTENTIAL_MATCH status on items they are a party to.
+    """
     parsed_type     = ItemType(item_type) if item_type else None
     parsed_cats     = [ItemCategory(c) for c in category]    if category     else None
     parsed_statuses = [ItemStatus(s)    for s in item_status] if item_status else None
     matched_ids     = get_matched_item_ids(db, current_user.id) if current_user else None
+    viewer_id       = current_user.id if current_user else None
+    chat_unlocked   = get_chat_unlocked_item_ids(db, current_user.id) if current_user else None
 
     return item_service.browse_items(
         db,
@@ -121,8 +139,20 @@ def browse_public(
         skip=skip,
         limit=limit,
         viewer_matched_ids=matched_ids,
-        viewer_user=current_user,
+        viewer_id=viewer_id,
+        chat_unlocked_ids=chat_unlocked,
     )
+
+
+# ── Lost Item CRUD ────────────────────────────────────────────────────────────
+
+@router.post("/lost/check-hidden-answers", response_model=CheckHiddenAnswersResponse)
+def check_lost_hidden_answers(
+    payload: CheckHiddenAnswersRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Warn when hidden answers are too similar to the public description (V4.3)."""
+    return CheckHiddenAnswersResponse(warnings=item_service.check_hidden_answers(payload))
 
 
 @router.post("/lost", response_model=LostItemOwnerResponse)
@@ -210,80 +240,21 @@ def extend_item(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
 
-@router.post("/found", response_model=FoundItemCreateResponse, status_code=status.HTTP_201_CREATED)
+# ── Found Item CRUD (Feature D) ───────────────────────────────────────────────
+
+@router.post("/found", response_model=LostItemPublicResponse, status_code=status.HTTP_201_CREATED)
 def create_found_item(
     payload: CreateFoundItemRequest,
     background_tasks: BackgroundTasks,
-    current_user: Optional[User] = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     try:
-        result = item_service.create_found_item(db, payload, current_user)
+        result = item_service.create_found_item(db, current_user, payload)
         background_tasks.add_task(run_matching_background, result.id)
         return result
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
-
-
-@router.get("/found/track/{tracking_reference}", response_model=FoundItemTrackResponse)
-def get_found_item_by_tracking_reference(
-    tracking_reference: str,
-    db: Session = Depends(get_db),
-):
-    try:
-        result = item_service.get_found_item_by_tracking_reference(db, tracking_reference)
-        db.commit()
-        return result
-    except LookupError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
-
-
-@router.patch("/found/track/{tracking_reference}", response_model=FoundItemTrackResponse)
-def update_found_item_by_tracking_reference(
-    tracking_reference: str,
-    payload: UpdateFoundItemRequest,
-    db: Session = Depends(get_db),
-):
-    try:
-        return item_service.update_found_item_by_tracking_reference(
-            db, tracking_reference, payload
-        )
-    except LookupError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
-
-
-@router.get("/found/{item_id}/finder-track", response_model=FoundItemTrackResponse)
-def get_found_item_finder_track(
-    item_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    try:
-        return item_service.get_found_item_track_for_owner(db, item_id, current_user)
-    except LookupError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
-
-
-@router.get("/found/{item_id}/interest", response_model=ItemInterestStatusResponse)
-def get_item_interest_status(
-    item_id: uuid.UUID,
-    current_user: User | None = Depends(get_optional_user),
-    db: Session = Depends(get_db),
-):
-    return item_interest_service.get_interest_status(db, current_user, item_id)
-
-
-@router.post("/found/{item_id}/interest", response_model=ItemInterestRegisterResponse)
-def register_item_interest(
-    item_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    result = item_interest_service.register_interest(db, current_user, item_id)
-    db.commit()
-    return result
 
 
 @router.get("/my/found", response_model=FoundItemListResponse)

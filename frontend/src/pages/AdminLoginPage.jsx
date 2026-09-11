@@ -1,7 +1,7 @@
 /**
  * Admin login — same credentials as main app; root admin requires TOTP (Section 4.6).
  */
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { authService } from '../services/authService'
@@ -9,7 +9,6 @@ import {
   isValidAdminSecret,
   rememberAdminSecret,
   isAdminRole,
-  getAdminSecret,
 } from '../services/adminService'
 import SubmitButton from '../components/SubmitButton'
 import { useSubmitLock } from '../hooks/useSubmitLock'
@@ -17,19 +16,13 @@ import { useSubmitLock } from '../hooks/useSubmitLock'
 export default function AdminLoginPage() {
   const { adminSecret } = useParams()
   const navigate = useNavigate()
-  const { login, totpVerify, user, loading, isAuthenticated } = useAuth()
+  const { login, totpVerify } = useAuth()
   const { isSubmitting, tryAcquire, release } = useSubmitLock()
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [totpCode, setTotpCode] = useState('')
   const [sessionToken, setSessionToken] = useState(null)
-
-  useEffect(() => {
-    if (!loading && isAuthenticated && isAdminRole(user?.role)) {
-      navigate(`/admin/${getAdminSecret() || adminSecret}/dashboard`, { replace: true })
-    }
-  }, [loading, isAuthenticated, user?.role, navigate, adminSecret])
 
   if (!isValidAdminSecret(adminSecret)) {
     return (
@@ -40,14 +33,6 @@ export default function AdminLoginPage() {
   }
 
   rememberAdminSecret(adminSecret)
-
-  if (loading || (isAuthenticated && isAdminRole(user?.role))) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
-      </div>
-    )
-  }
 
   async function handleLogin(e) {
     e.preventDefault()

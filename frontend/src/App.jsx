@@ -1,12 +1,9 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
-import { AuthorityAuthProvider } from './context/AuthorityAuthContext'
-import { SupervisorAuthProvider } from './context/SupervisorAuthContext'
-import EscrowClaimPrompt from './components/EscrowClaimPrompt'
 import PushPromptBanner from './components/PushPromptBanner'
 import PushPromptTrigger from './components/PushPromptTrigger'
 import OfflineBanner from './components/OfflineBanner'
-import { AuthoritySessionRedirect, SupervisorSessionRedirect, AdminSessionRedirect } from './components/RoleSessionRedirects'
+import ChatRealtimeBridge from './components/ChatRealtimeBridge'
 
 // Pages
 import HomePage            from './pages/HomePage'
@@ -23,24 +20,19 @@ import LostItemsPage       from './pages/LostItemsPage'
 import FoundItemsPage      from './pages/FoundItemsPage'
 import ReturnedItemsPage   from './pages/ReturnedItemsPage'
 import ItemDetailPage      from './pages/ItemDetailPage'
-import ItemInterestPage    from './pages/ItemInterestPage'
 import ItemUnavailablePage from './pages/ItemUnavailablePage'
 import OfflinePage from './pages/OfflinePage'
+import VerifyOwnershipPage from './pages/VerifyOwnershipPage'
+import IHaveThisItemPage   from './pages/IHaveThisItemPage'
+import ThisMightBeMinePage  from './pages/ThisMightBeMinePage'
+import MessagesPage        from './pages/MessagesPage'
 import ReturnConfirmPage   from './pages/ReturnConfirmPage'
 import ReturnedDetailPage  from './pages/ReturnedDetailPage'
-import AdminTotpPage         from './pages/AdminTotpPage'
-import AuthorityOtpPage      from './pages/AuthorityOtpPage'
-import AdminDashboardPage    from './pages/AdminDashboardPage'
-import AuthorityDashboardPage from './pages/AuthorityDashboardPage'
-import SupervisorDashboardPage from './pages/SupervisorDashboardPage'
-import ClaimFormPage          from './pages/ClaimFormPage'
-import ClaimStatusPage        from './pages/ClaimStatusPage'
-import HandoverConfirmPage    from './pages/HandoverConfirmPage'
+import AdminLoginPage      from './pages/AdminLoginPage'
+import AdminDashboardPage  from './pages/AdminDashboardPage'
 
 // Guards
 import ProtectedRoute from './components/ProtectedRoute'
-import AuthorityProtectedRoute from './components/AuthorityProtectedRoute'
-import SupervisorProtectedRoute from './components/SupervisorProtectedRoute'
 import GuestRoute     from './components/GuestRoute'
 import NavBar         from './components/NavBar'
 import BottomNav      from './components/BottomNav'
@@ -66,16 +58,11 @@ function NotFoundPage() {
 export default function App() {
   return (
     <AuthProvider>
-      <AuthorityAuthProvider>
-      <SupervisorAuthProvider>
       {/* Global overlays — available on every page */}
       <OfflineBanner />
       <PushPromptTrigger />
       <PushPromptBanner />
-      <EscrowClaimPrompt />
-      <AuthoritySessionRedirect />
-      <SupervisorSessionRedirect />
-      <AdminSessionRedirect />
+      <ChatRealtimeBridge />
       <BottomNav />
       <Routes>
         {/* Public */}
@@ -84,8 +71,6 @@ export default function App() {
 
         {/* Guest-only */}
         <Route path="/login"           element={<GuestRoute><LoginPage /></GuestRoute>} />
-        <Route path="/authority/otp"   element={<GuestRoute><AuthorityOtpPage /></GuestRoute>} />
-        <Route path="/admin/totp"       element={<GuestRoute><AdminTotpPage /></GuestRoute>} />
         <Route path="/signup"          element={<GuestRoute><SignupPage /></GuestRoute>} />
         <Route path="/forgot-password" element={<GuestRoute><ForgotPasswordPage /></GuestRoute>} />
 
@@ -99,20 +84,37 @@ export default function App() {
         {/* Protected — Feature C: Lost Item Reporting */}
         <Route path="/report/lost"  element={<ProtectedRoute><ReportLostPage /></ProtectedRoute>} />
 
-        {/* Feature D / W3: Found Item Reporting — public */}
-        <Route path="/report/found" element={<ReportFoundPage />} />
-        <Route path="/track/found" element={<Navigate to="/found" replace />} />
+        {/* Protected — Feature D: Found Item Reporting */}
+        <Route path="/report/found" element={<ProtectedRoute><ReportFoundPage /></ProtectedRoute>} />
 
         {/* Feature F — public browse pages + item detail */}
         <Route path="/lost"        element={<LostItemsPage />} />
         <Route path="/found"       element={<FoundItemsPage />} />
         <Route path="/returned"    element={<ReturnedItemsPage />} />
-        <Route path="/items/:itemId/interest" element={
-          <ProtectedRoute><ItemInterestPage /></ProtectedRoute>
-        } />
         <Route path="/items/:itemId" element={<ItemDetailPage />} />
         <Route path="/item-unavailable" element={<ItemUnavailablePage />} />
         <Route path="/offline" element={<OfflinePage />} />
+
+        {/* Feature I — Path A ownership verification */}
+        <Route path="/verify-ownership/:matchId" element={
+          <ProtectedRoute><VerifyOwnershipPage /></ProtectedRoute>
+        } />
+
+        {/* Feature J — Path B I Have This Item */}
+        <Route path="/i-have-this-item/:lostItemId" element={
+          <ProtectedRoute><IHaveThisItemPage /></ProtectedRoute>
+        } />
+
+        {/* Feature K — Path C This Might Be Mine */}
+        <Route path="/this-might-be-mine/:foundItemId" element={
+          <ProtectedRoute><ThisMightBeMinePage /></ProtectedRoute>
+        } />
+        <Route path="/messages" element={
+          <ProtectedRoute><MessagesPage /></ProtectedRoute>
+        } />
+        <Route path="/messages/:conversationId" element={
+          <ProtectedRoute><MessagesPage /></ProtectedRoute>
+        } />
 
         {/* Feature M — Return confirmation */}
         <Route path="/returns/confirm/:matchId" element={
@@ -122,41 +124,14 @@ export default function App() {
           <ProtectedRoute><ReturnedDetailPage /></ProtectedRoute>
         } />
 
-        <Route path="/claims/found/:foundItemId" element={
-          <ProtectedRoute><ClaimFormPage /></ProtectedRoute>
-        } />
-
-        <Route path="/claims/status/:claimId" element={
-          <ProtectedRoute><ClaimStatusPage /></ProtectedRoute>
-        } />
-
-        <Route path="/handover/:handoverId" element={
-          <ProtectedRoute><HandoverConfirmPage /></ProtectedRoute>
-        } />
-        <Route path="/handover/:handoverId/confirm" element={
-          <ProtectedRoute><HandoverConfirmPage /></ProtectedRoute>
-        } />
-
-        <Route path="/authority/login" element={<Navigate to="/login" replace />} />
-        <Route path="/authority/dashboard" element={
-          <AuthorityProtectedRoute><AuthorityDashboardPage /></AuthorityProtectedRoute>
-        } />
-
-        <Route path="/supervisor/login" element={<Navigate to="/login" replace />} />
-        <Route path="/supervisor/dashboard" element={
-          <SupervisorProtectedRoute><SupervisorDashboardPage /></SupervisorProtectedRoute>
-        } />
-
         {/* Feature R — secret admin route (404 if secret path wrong) */}
-        <Route path="/admin/:adminSecret/login" element={<Navigate to="/login" replace />} />
+        <Route path="/admin/:adminSecret/login" element={<AdminLoginPage />} />
         <Route path="/admin/:adminSecret/dashboard" element={<AdminDashboardPage />} />
-        <Route path="/admin/:adminSecret" element={<Navigate to="/login" replace />} />
+        <Route path="/admin/:adminSecret" element={<AdminLoginPage />} />
 
         {/* Fallback — unmatched routes show a not-found page, never silently redirect */}
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
-      </SupervisorAuthProvider>
-      </AuthorityAuthProvider>
     </AuthProvider>
   )
 }

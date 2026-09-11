@@ -8,22 +8,82 @@ import { getMyLostItems, deleteItem, extendItem,
 import { useAuth } from '../context/AuthContext'
 import NavBar from '../components/NavBar'
 import { getMyMatches } from '../services/matchService'
-import { getMyClaims, getAwaitingConfirmation } from '../services/claimService'
 import { listMyReturns } from '../services/returnService'
-import { getMyTokens, redeemTokens } from '../services/tokenService'
 import { invalidateAfterItemChange } from '../utils/queryCache'
+import { matchNeedsVerification, matchVerificationComplete } from '../utils/matchSelection'
 import {
+  TRUST_EVENT_META,
+  TrustEventIcon,
   CategoryIcon,
   getCategoryLabel,
   EmptyInboxIcon,
   MapPin,
   Bot,
+  Star,
   ClipboardList,
   Check,
+  CircleDollarSign,
+  Package,
 } from '../components/icons'
-import { ITEM_STATUS_PILL, formatItemStatus } from '../utils/itemStatusStyles'
 
-const STATUS_CLASSES = ITEM_STATUS_PILL
+function formatRelativeTime(iso) {
+  const diff = Math.floor((Date.now() - new Date(iso)) / 1000)
+  if (diff < 60) return 'just now'
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  if (diff < 2592000) return `${Math.floor(diff / 86400)}d ago`
+  return new Date(iso).toLocaleDateString()
+}
+
+// ── Trust event feed ──────────────────────────────────────────────────────────
+
+function TrustEventFeed({ events }) {
+  if (!events?.length) return null
+  return (
+    <div className="mt-4 glass p-4">
+      <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">
+        Recent Trust Activity
+      </h3>
+      <ul className="flex flex-col gap-2">
+        {events.map((ev) => {
+          const meta = TRUST_EVENT_META[ev.reason] ?? { label: ev.reason, Icon: Package }
+          const positive = ev.delta > 0
+          return (
+            <li key={ev.id} className="flex items-center justify-between gap-3
+                                       text-sm py-1.5 border-b border-slate-100 dark:border-slate-700/60
+                                       last:border-0">
+              <span className="flex items-center gap-2 min-w-0">
+                <TrustEventIcon reason={ev.reason} />
+                <span className="text-slate-700 dark:text-slate-300 truncate">{meta.label}</span>
+              </span>
+              <span className="flex items-center gap-2 flex-shrink-0 text-xs text-slate-400">
+                <span>{formatRelativeTime(ev.created_at)}</span>
+                <span className={`font-semibold text-sm ${positive
+                  ? 'text-green-600 dark:text-green-400'
+                  : 'text-red-500 dark:text-red-400'}`}>
+                  {positive ? '+' : ''}{ev.delta}
+                </span>
+              </span>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+// ── Trust tier helpers ────────────────────────────────────────────────────────
+
+function tierClass(tier) {
+  switch (tier) {
+    case 'Community Champion': return 'tier-champion'
+    case 'Reliable Member':    return 'tier-reliable'
+    case 'Trusted Member':     return 'tier-trusted'
+    default:                   return 'tier-new'
+  }
+}
+
+// ── Overview stat card ────────────────────────────────────────────────────────
 
 function StatCard({ label, value, icon, sub }) {
   return (
@@ -52,6 +112,21 @@ function EmptyTab({ message, cta, ctaTo }) {
       )}
     </div>
   )
+}
+
+const STATUS_CLASSES = {
+  open:               'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
+  potential_match:    'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+  under_verification: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+  under_dispute:      'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+  returned:           'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400',
+  expired:            'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400',
+  archived:           'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500',
+  closed:             'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500',
+}
+
+function formatStatus(s) {
+  return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 function daysLeft(expiryDate) {
@@ -98,7 +173,7 @@ function LostItemRow({ item, onDelete, onExtend, deleting, extending }) {
             {getCategoryLabel(item.category)}
           </span>
           <span className={`inline-flex px-2 py-0.5 rounded-lg text-xs font-medium ${STATUS_CLASSES[item.status] ?? ''}`}>
-            {formatItemStatus(item.status)}
+            {formatStatus(item.status)}
           </span>
           {expiringSoon && (
             <span className="inline-flex px-2 py-0.5 rounded-lg text-xs font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">
@@ -180,7 +255,7 @@ function FoundItemRow({ item, onDelete, onExtend, deleting, extending }) {
             {getCategoryLabel(item.category)}
           </span>
           <span className={`inline-flex px-2 py-0.5 rounded-lg text-xs font-medium ${STATUS_CLASSES[item.status] ?? ''}`}>
-            {formatItemStatus(item.status)}
+            {formatStatus(item.status)}
           </span>
           {expiringSoon && (
             <span className="inline-flex px-2 py-0.5 rounded-lg text-xs font-medium
@@ -222,88 +297,6 @@ function FoundItemRow({ item, onDelete, onExtend, deleting, extending }) {
   )
 }
 
-// ── My Claims / Awaiting confirmation (V5) ────────────────────────────────────
-
-const CLAIM_STATUS_PILL = {
-  pending_review: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
-  called_to_collect: 'bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300',
-  rejected: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
-}
-
-function ClaimDashboardCard({ claim }) {
-  return (
-    <div className="flex flex-col sm:flex-row gap-3 p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50">
-      <div className="flex-shrink-0">
-        {claim.thumbnail_url ? (
-          <img src={claim.thumbnail_url} alt="" className="w-16 h-16 rounded-xl object-cover" />
-        ) : (
-          <div className="w-16 h-16 rounded-xl bg-slate-100 dark:bg-slate-700 flex items-center justify-center">
-            <CategoryIcon category={claim.category} className="w-7 h-7 text-slate-400" />
-          </div>
-        )}
-      </div>
-      <div className="flex-1 min-w-0 space-y-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-            {getCategoryLabel(claim.category)}
-          </span>
-          <span className={`inline-flex px-2 py-0.5 rounded-lg text-xs font-medium ${CLAIM_STATUS_PILL[claim.viewer_state] || ''}`}>
-            {claim.status_label}
-          </span>
-        </div>
-        <p className="text-xs text-slate-600 dark:text-slate-400 line-clamp-2">{claim.description_preview}</p>
-        <p className="text-xs text-slate-500">
-          {claim.drop_point_name}
-          {claim.operating_hours ? ` · ${claim.operating_hours}` : ''}
-        </p>
-        <Link to={`/claims/status/${claim.claim_id}`} className="btn-secondary text-xs py-1.5 px-3 inline-block mt-2">
-          View Claim Status
-        </Link>
-      </div>
-    </div>
-  )
-}
-
-function AwaitingConfirmationCard({ item }) {
-  return (
-    <div className="flex flex-col sm:flex-row gap-3 p-4 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-900/10">
-      <div className="flex-shrink-0">
-        {item.thumbnail_url ? (
-          <img src={item.thumbnail_url} alt="" className="w-16 h-16 rounded-xl object-cover" />
-        ) : (
-          <div className="w-16 h-16 rounded-xl bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
-            <CategoryIcon category={item.category} className="w-7 h-7 text-emerald-600" />
-          </div>
-        )}
-      </div>
-      <div className="flex-1 min-w-0 space-y-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-            {getCategoryLabel(item.category)}
-          </span>
-          <span className="inline-flex px-2 py-0.5 rounded-lg text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
-            {item.status_label}
-          </span>
-        </div>
-        <p className="text-xs text-slate-600 dark:text-slate-400 line-clamp-2">{item.description_preview}</p>
-        <p className="text-xs text-slate-500">
-          {item.drop_point_name}
-          {item.operating_hours ? ` · ${item.operating_hours}` : ''}
-        </p>
-        {item.can_confirm && item.handover_id ? (
-          <Link to={`/handover/${item.handover_id}`} className="btn-primary text-xs py-1.5 px-3 inline-block mt-2">
-            Confirm I Collected This Item
-          </Link>
-        ) : (
-          <p className="text-xs text-emerald-700 dark:text-emerald-300 mt-2">
-            Please visit {item.drop_point_name} to collect your item.
-          </p>
-        )}
-      </div>
-    </div>
-  )
-}
-
 // ── Potential match row (Feature G — Path A) ──────────────────────────────────
 
 function MatchRow({ match }) {
@@ -325,7 +318,7 @@ function MatchRow({ match }) {
           {status === 'verified' && (
             <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700
                              dark:bg-green-900/40 dark:text-green-300">
-              Verified
+              Chat unlocked
             </span>
           )}
           {status === 'pending_review' && (
@@ -372,13 +365,39 @@ function MatchRow({ match }) {
         </div>
       </div>
 
-      {isLostOwner && (status === 'active' || status === 'pending_review') && (
+      {isLostOwner && matchNeedsVerification(match) && (
         <Link
-          to={`/claims/found/${match.found_item.id}?path=a`}
+          to={`/verify-ownership/${match.id}`}
           className="btn-primary text-sm py-2 w-full sm:w-auto text-center"
         >
           Verify Ownership
         </Link>
+      )}
+      {isLostOwner && status === 'pending_review' && (
+        <p className="text-xs text-amber-600 dark:text-amber-400">
+          Your verification is under admin review. We&apos;ll notify you when decided.
+        </p>
+      )}
+      {matchVerificationComplete(match) && match.conversation_id && (
+        <div className="flex flex-col sm:flex-row gap-2">
+          <Link
+            to={`/returns/confirm/${match.id}`}
+            className="btn-primary text-sm py-2 w-full sm:w-auto text-center"
+          >
+            Confirm Return
+          </Link>
+          <Link
+            to={`/messages/${match.conversation_id}`}
+            className="btn-secondary text-sm py-2 w-full sm:w-auto text-center"
+          >
+            Open Chat
+          </Link>
+        </div>
+      )}
+      {!isLostOwner && status === 'active' && (
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          Waiting for the lost item owner to verify ownership. You&apos;ll be notified when chat unlocks.
+        </p>
       )}
     </div>
   )
@@ -396,8 +415,17 @@ function ReturnedRow({ row }) {
         </p>
         <p className="text-xs text-slate-500 mt-0.5">
           {new Date(row.returned_at).toLocaleDateString()}
-          {row.drop_point_name && (
-            <> · Collected from {row.drop_point_name}</>
+          {' · '}
+          {row.is_owner ? (
+            <>
+              Finder: {row.other_user_display_name} ({row.other_user_trust_tier})
+              {row.appreciation_sent ? ' · Tip sent' : ''}
+            </>
+          ) : (
+            <>
+              Returned to owner
+              {row.appreciation_received ? ' · Appreciated' : ''}
+            </>
           )}
           {row.dispute_active ? ' · Under dispute' : ''}
         </p>
@@ -421,156 +449,6 @@ const TABS = [
   { id: 'pending',  label: 'Pending' },
 ]
 
-const TOKEN_REASON_LABELS = {
-  found_item_posted: 'Posted a found item',
-  drop_off_on_time: 'On-time drop-off',
-  drop_off_late: 'Late drop-off',
-  item_claimed: 'Item claimed by owner',
-  redemption: 'Redemption',
-  redemption_refund: 'Redemption refund',
-}
-
-function formatTokenReason(reason) {
-  return TOKEN_REASON_LABELS[reason] ?? reason.replace(/_/g, ' ')
-}
-
-function formatTokenDate(iso) {
-  return new Date(iso).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
-}
-
-function RedeemTokensModal({ open, onClose, balance, onSuccess }) {
-  const [amount, setAmount] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [result, setResult] = useState(null)
-
-  useEffect(() => {
-    if (!open) {
-      setAmount('')
-      setResult(null)
-      setSubmitting(false)
-    }
-  }, [open])
-
-  if (!open) return null
-
-  async function handleSubmit(e) {
-    e.preventDefault()
-    const value = parseInt(amount, 10)
-    if (!value || value < 1) {
-      toast.error('Enter a valid token amount.')
-      return
-    }
-    if (value > balance) {
-      toast.error(`You only have ${balance} tokens.`)
-      return
-    }
-    setSubmitting(true)
-    try {
-      const data = await redeemTokens(value)
-      setResult(data)
-      onSuccess?.(data)
-      toast.success('Redemption code generated')
-    } catch (err) {
-      toast.error(err.response?.data?.detail || 'Could not generate code')
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  function copyCode() {
-    if (!result?.code) return
-    navigator.clipboard.writeText(result.code)
-    toast.success('Code copied')
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-      <div className="glass w-full max-w-md p-6 max-md:p-4" role="dialog" aria-modal="true">
-        <div className="flex items-start justify-between gap-3 mb-4">
-          <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100">
-            Redeem Tokens
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-            aria-label="Close"
-          >
-            ✕
-          </button>
-        </div>
-
-        {!result ? (
-          <>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
-              Enter how many tokens to redeem. They are deducted immediately and a one-time
-              code is generated. Present the code to staff at a participating service.
-              Unused codes expire after 30 days and tokens are refunded automatically.
-            </p>
-            <p className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
-              Available balance: <span className="tabular-nums">{balance}</span>
-            </p>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <input
-                type="number"
-                min="1"
-                max={balance}
-                step="1"
-                required
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="Token amount"
-                className="input-field w-full"
-              />
-              <div className="flex gap-2 justify-end">
-                <button type="button" onClick={onClose} className="btn-secondary text-sm">
-                  Cancel
-                </button>
-                <button type="submit" disabled={submitting || balance < 1} className="btn-primary text-sm">
-                  {submitting ? 'Generating…' : 'Generate Code'}
-                </button>
-              </div>
-            </form>
-          </>
-        ) : (
-          <div className="space-y-4">
-            <p className="text-sm text-slate-500 dark:text-slate-400">
-              Show this code to staff. It can only be used once and expires on{' '}
-              {formatTokenDate(result.expires_at)}.
-            </p>
-            <div className="rounded-xl border-2 border-dashed border-brand-400/60 bg-brand-50/50 dark:bg-brand-950/30 p-4 text-center">
-              <p className="text-xs uppercase tracking-wide text-slate-500 mb-1">Your code</p>
-              <p className="text-2xl font-bold tracking-wider text-brand-700 dark:text-brand-300 font-mono">
-                {result.code}
-              </p>
-              <p className="text-sm text-slate-600 dark:text-slate-400 mt-2">
-                {result.token_amount} token{result.token_amount !== 1 ? 's' : ''}
-              </p>
-            </div>
-            <p className="text-xs text-slate-500">
-              New balance: <span className="font-semibold tabular-nums">{result.balance_after}</span>
-            </p>
-            <div className="flex gap-2 justify-end">
-              <button type="button" onClick={copyCode} className="btn-secondary text-sm">
-                Copy Code
-              </button>
-              <button type="button" onClick={onClose} className="btn-primary text-sm">
-                Done
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
@@ -581,7 +459,6 @@ export default function DashboardPage() {
   const [extendingId, setExtendingId]       = useState(null)
   const [deletingFoundId, setDeletingFoundId]   = useState(null)
   const [extendingFoundId, setExtendingFoundId] = useState(null)
-  const [redeemOpen, setRedeemOpen] = useState(false)
   const queryClient = useQueryClient()
 
   const { data: profile, isLoading, isError } = useQuery({
@@ -599,32 +476,19 @@ export default function DashboardPage() {
     queryFn: () => getMyFoundItems({ skip: 0, limit: 50 }),
   })
 
+  const { data: trustHistory } = useQuery({
+    queryKey: ['my-trust-events'],
+    queryFn: () => userService.getMyTrustHistory({ limit: 5 }),
+  })
+
   const { data: matchData, isLoading: matchesLoading } = useQuery({
     queryKey: ['my-matches'],
     queryFn: getMyMatches,
-    refetchInterval: activeTab === 'pending' ? 30_000 : false,
-  })
-
-  const { data: myClaimsData, isLoading: claimsLoading } = useQuery({
-    queryKey: ['my-claims'],
-    queryFn: getMyClaims,
-    refetchInterval: activeTab === 'pending' ? 30_000 : false,
-  })
-
-  const { data: awaitingData, isLoading: awaitingLoading } = useQuery({
-    queryKey: ['my-awaiting-confirmation'],
-    queryFn: getAwaitingConfirmation,
-    refetchInterval: activeTab === 'pending' ? 30_000 : false,
   })
 
   const { data: returnsData, isLoading: returnsLoading } = useQuery({
     queryKey: ['my-returns'],
     queryFn: listMyReturns,
-  })
-
-  const { data: tokensData, isLoading: tokensLoading } = useQuery({
-    queryKey: ['my-tokens'],
-    queryFn: getMyTokens,
   })
 
   useEffect(() => {
@@ -745,6 +609,7 @@ export default function DashboardPage() {
               <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100 truncate">
                 {profile.full_name}
               </h1>
+              <span className={tierClass(profile.trust_tier)}>{profile.trust_tier}</span>
             </div>
             <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
               @{profile.username} · {profile.university_short_name} · Member since {profile.member_since}
@@ -792,14 +657,10 @@ export default function DashboardPage() {
         {/* ── Overview cards (Section 25.1) ── */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 max-md:gap-2.5 mb-2">
           <StatCard
-            label="Your Tokens"
-            value={tokensLoading ? '…' : (tokensData?.balance ?? 0)}
-            icon={
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-              </svg>
-            }
-            sub="Reward balance"
+            label="Trust Score"
+            value={trustHistory?.trust_score ?? profile.trust_score}
+            icon={<Star className="w-6 h-6" aria-hidden />}
+            sub={trustHistory?.tier ?? profile.trust_tier}
           />
           <StatCard
             label="Items Posted"
@@ -814,60 +675,17 @@ export default function DashboardPage() {
             sub="All time"
           />
           <StatCard
-            label="Pending Matches"
-            value={matchData?.total ?? 0}
-            icon={<Bot className="w-6 h-6" aria-hidden />}
-            sub="AI suggestions"
+            label="Tips Received"
+            value={profile.tips_received_count ?? 0}
+            icon={<CircleDollarSign className="w-6 h-6" aria-hidden />}
+            sub="Count only"
           />
         </div>
 
-        {/* ── Token ledger (W11) ── */}
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-          <div />
-          <button
-            type="button"
-            onClick={() => setRedeemOpen(true)}
-            disabled={tokensLoading || (tokensData?.balance ?? 0) < 1}
-            className="btn-primary text-sm"
-          >
-            Redeem Tokens
-          </button>
-        </div>
+        {/* ── Trust event feed (Section 17.2 — own dashboard: raw score) ── */}
+        <TrustEventFeed events={trustHistory?.events} />
 
-        {!tokensLoading && (tokensData?.recent?.length ?? 0) > 0 && (
-          <div className="glass p-4 max-md:p-3 mb-4">
-            <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">
-              Recent token activity
-            </h2>
-            <ul className="divide-y divide-slate-200/60 dark:divide-slate-700/50">
-              {tokensData.recent.map((entry) => (
-                <li
-                  key={entry.id}
-                  className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm text-slate-800 dark:text-slate-200 truncate">
-                      {formatTokenReason(entry.reason)}
-                    </p>
-                    <p className="text-xs text-slate-400 dark:text-slate-500">
-                      {formatTokenDate(entry.created_at)}
-                    </p>
-                  </div>
-                  <span
-                    className={`text-sm font-semibold tabular-nums shrink-0 ${
-                      entry.delta >= 0
-                        ? 'text-green-600 dark:text-green-400'
-                        : 'text-red-600 dark:text-red-400'
-                    }`}
-                  >
-                    {entry.delta >= 0 ? '+' : ''}{entry.delta}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
+        {/* spacer */}
         <div className="mb-4" />
 
         {/* ── Tabs (Section 25.2) ── */}
@@ -979,72 +797,28 @@ export default function DashboardPage() {
               )
             )}
             {activeTab === 'pending' && (
-              (matchesLoading || claimsLoading || awaitingLoading) ? (
+              matchesLoading ? (
                 <div className="flex justify-center py-16">
                   <div className="w-7 h-7 border-4 border-brand-500 border-t-transparent rounded-full animate-spin" />
                 </div>
+              ) : !matchData?.matches?.length ? (
+                <EmptyTab
+                  message="When our AI finds a potential match for your items, it will appear here. Post both lost and found items to trigger matching."
+                />
               ) : (
-                <div className="flex flex-col gap-8">
-                  {(awaitingData?.items?.length ?? 0) > 0 && (
-                    <section className="space-y-3">
-                      <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                        Awaiting Your Confirmation
-                      </h3>
-                      <div className="flex flex-col gap-4">
-                        {awaitingData.items.map((item) => (
-                          <AwaitingConfirmationCard key={item.claim_id} item={item} />
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  {(myClaimsData?.claims?.length ?? 0) > 0 && (
-                    <section className="space-y-3">
-                      <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                        My Claims
-                      </h3>
-                      <div className="flex flex-col gap-4">
-                        {myClaimsData.claims.map((claim) => (
-                          <ClaimDashboardCard key={claim.claim_id} claim={claim} />
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  {!matchData?.matches?.length
-                    && !(myClaimsData?.claims?.length)
-                    && !(awaitingData?.items?.length) ? (
-                      <EmptyTab
-                        message="When our AI finds a potential match for your items, or you submit a claim, it will appear here."
-                      />
-                    ) : matchData?.matches?.length ? (
-                      <section className="space-y-3">
-                        <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                          Potential Matches
-                        </h3>
-                        <p className="text-sm text-slate-500 dark:text-slate-400">
-                          {matchData.total} potential match{matchData.total !== 1 ? 'es' : ''} — ranked by confidence
-                        </p>
-                        <div className="flex flex-col gap-4">
-                          {matchData.matches.map((m) => (
-                            <MatchRow key={m.id} match={m} />
-                          ))}
-                        </div>
-                      </section>
-                    ) : null}
+                <div className="flex flex-col gap-4">
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    {matchData.total} potential match{matchData.total !== 1 ? 'es' : ''} — ranked by confidence
+                  </p>
+                  {matchData.matches.map((m) => (
+                    <MatchRow key={m.id} match={m} />
+                  ))}
                 </div>
               )
             )}
           </div>
         </div>
       </div>
-
-      <RedeemTokensModal
-        open={redeemOpen}
-        onClose={() => setRedeemOpen(false)}
-        balance={tokensData?.balance ?? 0}
-        onSuccess={() => queryClient.invalidateQueries({ queryKey: ['my-tokens'] })}
-      />
     </div>
   )
 }

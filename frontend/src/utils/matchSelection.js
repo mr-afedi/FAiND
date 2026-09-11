@@ -1,6 +1,6 @@
 /**
  * Pick the most relevant match when multiple exist for the same item.
- * Verified matches take priority over active ones.
+ * Verified matches take priority over active ones so users are not re-prompted.
  */
 const STATUS_RANK = {
   verified: 0,
@@ -21,21 +21,15 @@ export function pickPrimaryMatch(matches, predicate) {
   })[0]
 }
 
+function isClaimBridgeMatch(match) {
+  const path = match?.score_breakdown?.path
+  return path === 'path_b' || path === 'path_c'
+}
+
 export function matchNeedsVerification(match) {
-  return false
-}
-
-/** Path A — lost owner can submit a claim when match is active. */
-export function matchCanSubmitClaim(match) {
-  return match?.user_role === 'lost_owner'
-    && (match?.status === 'active' || match?.status === 'pending_review')
-}
-
-/** Legacy return flow — kept for verified matches with existing returns. */
-export function matchCanConfirmReturn(match) {
-  return match?.status === 'verified'
+  return match?.status === 'active' && !isClaimBridgeMatch(match)
 }
 
 export function matchVerificationComplete(match) {
-  return matchCanConfirmReturn(match)
+  return match?.status === 'verified' || Boolean(match?.conversation_id)
 }

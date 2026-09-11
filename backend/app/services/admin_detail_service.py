@@ -1,29 +1,40 @@
 """
 Admin detail panels — Feature R reinforcement (Section 26).
 
-Builds context for disputes, reports, posts, and users.
+Builds rich context for claims, disputes, reports, fraud, posts, and users.
 """
 from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.admin_log import AdminLog, AdminActionType
-from app.models.authority import Authority
-from app.models.claim import Claim, ClaimPath, ClaimStatus
-from app.models.handover import Handover
+from app.models.conversation import Conversation
+from app.models.fraud_event import FraudEvent
+from app.models.ihave_this_item_claim import IHaveThisItemClaim
 from app.models.item import Item, ItemStatus, ItemType
-from app.models.item_return import ItemReturn, ReturnMethod
-from app.models.drop_point import DropPoint
-from app.models.notification import Notification
-from app.models.potential_match import PotentialMatch
+from app.models.item_return import ItemReturn
+from app.models.message import Message
+from app.models.potential_match import PotentialMatch, PotentialMatchStatus
 from app.models.report import PostReport, UserReport, ReportStatus
+from app.models.this_might_be_mine_claim import ThisMightBeMineClaim
+from app.models.trust_event import TrustEvent
 from app.models.user import User
-from app.utils.encryption import decrypt
+from app.models.verification_attempt import VerificationAttempt, VerificationPath
+from app.models.tip_payment import TipPayment, TipPaymentStatus
+from app.services.trust_service import get_trust_tier
+from app.services.fraud_service import get_risk_tier
+
+SCORING_FORMULAS = {
+    "path_a": "Path A: weighted average of hidden-answer semantic similarities (review at 0.50–0.70)",
+    "path_b": "Path B: 0.40×hidden + 0.35×image + 0.25×location (review at 0.50–0.75)",
+    "path_c": "Path C: 1.0×hidden answer similarity only (review at 0.50–0.70)",
+}
 
 
 def _recent_admin_actions(
@@ -55,6 +66,20 @@ def _recent_admin_actions(
     return out
 
 
+def _detect_gradual_improvement(scores: list[float]) -> bool:
+    if len(scores) < 3:
+        return False
+    return all(scores[i] > scores[i - 1] for i in range(1, len(scores)))
+
+
+def _score_color(sim: float) -> str:
+    if sim >= 0.7:
+        return "green"
+    if sim >= 0.5:
+        return "amber"
+    return "red"
+
+
 def _user_brief(db: Session, user_id: uuid.UUID | None) -> dict | None:
     if not user_id:
         return None
@@ -66,6 +91,10 @@ def _user_brief(db: Session, user_id: uuid.UUID | None) -> dict | None:
         "username": u.username,
         "full_name": u.full_name,
         "email": u.email,
+        "trust_score": u.trust_score,
+        "trust_tier": get_trust_tier(u.trust_score),
+        "fraud_risk_score": u.fraud_risk_score,
+        "fraud_risk_tier": get_risk_tier(u.fraud_risk_score),
         "status": u.status.value,
         "role": u.role.value,
     }
@@ -123,6 +152,182 @@ def _item_status_history(db: Session, item_id: uuid.UUID) -> list[dict]:
     return history
 
 
+def _detect_claim_path(
+    db: Session, match: PotentialMatch
+) -> tuple[str, uuid.UUID | None, Any | None]:
+    claim_b = (
+        db.query(IHaveThisItemClaim)
+        .filter(IHaveThisItemClaim.potential_match_id == match.id)
+        .order_by(IHaveThisItemClaim.created_at.desc())
+        .first()
+    )
+    if claim_b:
+        return "path_b", claim_b.user_id, claim_b
+
+    claim_c = (
+        db.query(ThisMightBeMineClaim)
+        .filter(ThisMightBeMineClaim.potential_match_id == match.id)
+        .order_by(ThisMightBeMineClaim.created_at.desc())
+        .first()
+    )
+    if claim_c:
+        return "path_c", claim_c.user_id, claim_c
+
+    attempt = (
+        db.query(VerificationAttempt)
+        .filter(VerificationAttempt.potential_match_id == match.id)
+        .order_by(VerificationAttempt.created_at.desc())
+        .first()
+    )
+    if attempt:
+        return "path_a", attempt.user_id, attempt
+    return "path_a", None, None
+
+
+def _verification_attempts_for_match(db: Session, match_id: uuid.UUID) -> list[dict]:
+    rows = (
+        db.query(VerificationAttempt)
+        .filter(VerificationAttempt.potential_match_id == match_id)
+        .order_by(VerificationAttempt.created_at.asc())
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "path": r.path.value if r.path else "path_a",
+            "ownership_score": r.ownership_score,
+            "result": r.result.value,
+            "score_breakdown": r.score_breakdown or {},
+            "created_at": r.created_at,
+            "user_id": r.user_id,
+        }
+        for r in rows
+    ]
+
+
+def _sanitize_path_c_detail(detail: dict) -> dict:
+    """Strip raw hidden answers — admin sees similarity scores only."""
+    if not detail:
+        return {}
+    out = dict(detail)
+    if "finder_questions" in out:
+        out["finder_questions"] = [
+            {
+                "question_id": q.get("question_id"),
+                "position": q.get("position"),
+                "question": q.get("question"),
+            }
+            for q in out.get("finder_questions", [])
+        ]
+    if "owner_answers" in out:
+        out["owner_answers"] = [
+            {
+                "question_id": a.get("question_id"),
+                "position": a.get("position"),
+                "answer_provided": True,
+            }
+            for a in out.get("owner_answers", [])
+        ]
+    return out
+
+
+def get_claim_detail(db: Session, match_id: uuid.UUID) -> dict:
+    match = (
+        db.query(PotentialMatch)
+        .options(
+            joinedload(PotentialMatch.lost_item),
+            joinedload(PotentialMatch.found_item),
+        )
+        .filter(PotentialMatch.id == match_id)
+        .first()
+    )
+    if not match:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim not found.")
+
+    path, claimant_id, claim_obj = _detect_claim_path(db, match)
+    claimant = _user_brief(db, claimant_id)
+
+    evidence: dict[str, Any] = {
+        "score_breakdown": match.score_breakdown or {},
+        "verification_attempts": _verification_attempts_for_match(db, match.id),
+    }
+
+    if path == "path_b" and isinstance(claim_obj, IHaveThisItemClaim):
+        evidence["claim_submission"] = {
+            "location_label": claim_obj.location_label,
+            "image_url": claim_obj.image_url,
+            "attempt_scores": claim_obj.attempt_scores or [],
+            "result": claim_obj.result.value,
+            "ownership_score": claim_obj.ownership_score,
+            "score_breakdown": claim_obj.score_breakdown or {},
+        }
+    elif path == "path_c" and isinstance(claim_obj, ThisMightBeMineClaim):
+        evidence["claim_submission"] = {
+            "attempt_scores": claim_obj.attempt_scores or [],
+            "result": claim_obj.result.value,
+            "ownership_score": claim_obj.ownership_score,
+            "score_breakdown": claim_obj.score_breakdown or {},
+            "verification_detail": _sanitize_path_c_detail(claim_obj.verification_detail or {}),
+        }
+
+    attempt_scores: list[float] = []
+    for att in evidence.get("verification_attempts", []):
+        if att.get("ownership_score") is not None:
+            attempt_scores.append(float(att["ownership_score"]))
+    if path == "path_b" and isinstance(claim_obj, IHaveThisItemClaim):
+        attempt_scores = [float(s) for s in (claim_obj.attempt_scores or [])]
+    elif path == "path_c" and isinstance(claim_obj, ThisMightBeMineClaim):
+        attempt_scores = [float(s) for s in (claim_obj.attempt_scores or [])]
+
+    return {
+        "match_id": match.id,
+        "path": path,
+        "scoring_formula": SCORING_FORMULAS.get(path, path),
+        "status": match.status.value,
+        "match_score": match.match_score,
+        "created_at": match.created_at,
+        "claimant": claimant,
+        "lost_item": _item_detail(db, match.lost_item),
+        "found_item": _item_detail(db, match.found_item),
+        "evidence": evidence,
+        "status_history": _item_status_history(db, match.lost_item_id),
+        "gradual_improvement_detected": _detect_gradual_improvement(attempt_scores),
+        "attempt_scores": attempt_scores,
+        "recent_actions": _recent_admin_actions(db, "potential_match", match.id),
+    }
+
+
+def _chat_for_match(db: Session, match_id: uuid.UUID) -> list[dict]:
+    conv = (
+        db.query(Conversation)
+        .filter(Conversation.potential_match_id == match_id)
+        .first()
+    )
+    if not conv:
+        return []
+    messages = (
+        db.query(Message)
+        .filter(Message.conversation_id == conv.id)
+        .order_by(Message.created_at.asc())
+        .limit(500)
+        .all()
+    )
+    out = []
+    for m in messages:
+        sender = db.query(User).filter(User.id == m.sender_id).first()
+        out.append(
+            {
+                "id": m.id,
+                "sender_name": sender.full_name if sender else "Unknown",
+                "sender_id": m.sender_id,
+                "body": m.body,
+                "created_at": m.created_at,
+                "read_at": m.read_at,
+            }
+        )
+    return out
+
+
 def get_dispute_detail(
     db: Session,
     dispute_id: uuid.UUID,
@@ -130,17 +335,32 @@ def get_dispute_detail(
     dispute_type: Optional[str] = None,
 ) -> dict:
     record = db.query(ItemReturn).filter(ItemReturn.id == dispute_id).first()
-    if not record:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dispute not found.")
-
-    if record.dispute_filed_at and not record.dispute_resolved_at:
+    if record and record.dispute_filed_at and not record.dispute_resolved_at:
         return _return_dispute_detail(db, record, dispute_type="return")
 
-    if record.admin_review_flagged and not record.dispute_filed_at and not record.dispute_resolved_at:
+    if record and record.admin_review_flagged and not record.dispute_filed_at:
         return _return_dispute_detail(db, record, dispute_type="manual")
 
-    resolved_type = dispute_type or ("return" if record.dispute_filed_at else "manual")
-    return _return_dispute_detail(db, record, dispute_type=resolved_type)
+    match = (
+        db.query(PotentialMatch)
+        .options(
+            joinedload(PotentialMatch.lost_item),
+            joinedload(PotentialMatch.found_item),
+        )
+        .filter(PotentialMatch.id == dispute_id)
+        .first()
+    )
+    if match and match.status == PotentialMatchStatus.PAUSED:
+        return _verification_dispute_detail(db, match)
+
+    if record:
+        return _return_dispute_detail(
+            db,
+            record,
+            dispute_type=dispute_type or ("return" if record.dispute_filed_at else "manual"),
+        )
+
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dispute not found.")
 
 
 def _return_dispute_detail(db: Session, record: ItemReturn, *, dispute_type: str) -> dict:
@@ -161,9 +381,8 @@ def _return_dispute_detail(db: Session, record: ItemReturn, *, dispute_type: str
             "finder_handed_over_at": record.finder_handed_over_at,
             "owner_received_at": record.owner_received_at,
             "method": record.method.value if record.method else None,
+            "tip_frozen": record.tip_frozen,
             "admin_review_flagged": record.admin_review_flagged,
-            "dispute_resolved_at": record.dispute_resolved_at,
-            "dispute_resolution_note": record.dispute_resolution_note,
         },
         "qr_logs": {
             "qr_generated": record.qr_token_hash is not None,
@@ -172,10 +391,58 @@ def _return_dispute_detail(db: Session, record: ItemReturn, *, dispute_type: str
         },
         "lost_item": _item_detail(db, lost_item),
         "found_item": _item_detail(db, found_item),
+        "verification_history": _verification_attempts_for_match(db, record.potential_match_id),
+        "chat_history": _chat_for_match(db, record.potential_match_id),
         "reports_on_parties": _reports_for_users(
             db, [record.lost_owner_id, record.found_owner_id]
         ),
         "recent_actions": _recent_admin_actions(db, "item_return", record.id),
+    }
+
+
+def _verification_dispute_detail(db: Session, match: PotentialMatch) -> dict:
+    paused_matches = (
+        db.query(PotentialMatch)
+        .filter(
+            PotentialMatch.lost_item_id == match.lost_item_id,
+            PotentialMatch.status == PotentialMatchStatus.PAUSED,
+        )
+        .all()
+    )
+    verified_matches = (
+        db.query(PotentialMatch)
+        .filter(
+            PotentialMatch.lost_item_id == match.lost_item_id,
+            PotentialMatch.status == PotentialMatchStatus.VERIFIED,
+        )
+        .all()
+    )
+    claimants = []
+    for m in paused_matches + verified_matches:
+        path, claimant_id, _ = _detect_claim_path(db, m)
+        claimants.append(
+            {
+                "match_id": m.id,
+                "path": path,
+                "status": m.status.value,
+                "match_score": m.match_score,
+                "claimant": _user_brief(db, claimant_id),
+            }
+        )
+
+    return {
+        "dispute_type": "verification",
+        "match_id": match.id,
+        "lost_item": _item_detail(db, match.lost_item),
+        "found_item": _item_detail(db, match.found_item),
+        "claimants": claimants,
+        "verification_history": _verification_attempts_for_match(db, match.id),
+        "chat_history": _chat_for_match(db, match.id),
+        "reports_on_parties": _reports_for_users(
+            db,
+            [match.lost_item.posted_by_id] if match.lost_item else [],
+        ),
+        "recent_actions": _recent_admin_actions(db, "potential_match", match.id),
     }
 
 
@@ -329,15 +596,19 @@ def get_post_detail(db: Session, item_id: uuid.UUID) -> dict:
         .limit(50)
         .all()
     )
-    matches_summary = [
-        {
-            "match_id": m.id,
-            "status": m.status.value,
-            "match_score": m.match_score,
-            "created_at": m.created_at,
-        }
-        for m in matches
-    ]
+    claims_summary = []
+    for m in matches:
+        path, claimant_id, _ = _detect_claim_path(db, m)
+        claims_summary.append(
+            {
+                "match_id": m.id,
+                "path": path,
+                "status": m.status.value,
+                "match_score": m.match_score,
+                "claimant": _user_brief(db, claimant_id),
+                "created_at": m.created_at,
+            }
+        )
 
     reports = (
         db.query(PostReport)
@@ -349,7 +620,7 @@ def get_post_detail(db: Session, item_id: uuid.UUID) -> dict:
     return {
         "item": _item_detail(db, item),
         "status_history": _item_status_history(db, item_id),
-        "matches": matches_summary,
+        "claims": claims_summary,
         "reports": [
             {
                 "id": r.id,
@@ -371,6 +642,20 @@ def get_user_detail(db: Session, user_id: uuid.UUID) -> dict:
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
+    trust_events = (
+        db.query(TrustEvent)
+        .filter(TrustEvent.user_id == user_id)
+        .order_by(TrustEvent.created_at.desc())
+        .limit(100)
+        .all()
+    )
+    fraud_events = (
+        db.query(FraudEvent)
+        .filter(FraudEvent.user_id == user_id)
+        .order_by(FraudEvent.created_at.asc())
+        .limit(100)
+        .all()
+    )
     items = (
         db.query(Item)
         .filter(Item.posted_by_id == user_id)
@@ -396,6 +681,28 @@ def get_user_detail(db: Session, user_id: uuid.UUID) -> dict:
         db.query(UserReport)
         .filter(UserReport.reported_user_id == user_id)
         .order_by(UserReport.created_at.desc())
+        .limit(30)
+        .all()
+    )
+
+    claims_b = (
+        db.query(IHaveThisItemClaim)
+        .filter(IHaveThisItemClaim.user_id == user_id)
+        .order_by(IHaveThisItemClaim.created_at.desc())
+        .limit(30)
+        .all()
+    )
+    claims_c = (
+        db.query(ThisMightBeMineClaim)
+        .filter(ThisMightBeMineClaim.user_id == user_id)
+        .order_by(ThisMightBeMineClaim.created_at.desc())
+        .limit(30)
+        .all()
+    )
+    verifications = (
+        db.query(VerificationAttempt)
+        .filter(VerificationAttempt.user_id == user_id)
+        .order_by(VerificationAttempt.created_at.desc())
         .limit(30)
         .all()
     )
@@ -427,8 +734,67 @@ def get_user_detail(db: Session, user_id: uuid.UUID) -> dict:
             "created_at": user.created_at,
             "suspended_at": user.suspended_at,
             "reports_suppressed": user.reports_suppressed,
+            "fraud_verification_override": getattr(user, "fraud_verification_override", False),
         },
+        "trust_score": user.trust_score,
+        "trust_tier": get_trust_tier(user.trust_score),
+        "trust_events": [
+            {
+                "id": e.id,
+                "delta": e.delta,
+                "reason": e.reason.value,
+                "reference_id": e.reference_id,
+                "applied_by_id": e.applied_by_id,
+                "created_at": e.created_at,
+            }
+            for e in trust_events
+        ],
+        "fraud_risk_score": user.fraud_risk_score,
+        "fraud_risk_tier": get_risk_tier(user.fraud_risk_score),
+        "fraud_events": [
+            {
+                "id": e.id,
+                "signal_type": e.signal_type.value,
+                "delta": e.delta,
+                "score_after": e.score_after,
+                "detail": e.detail or {},
+                "note": e.note,
+                "created_at": e.created_at,
+            }
+            for e in fraud_events
+        ],
         "items_posted": [_item_detail(db, i) for i in items],
+        "claims": {
+            "path_a_attempts": [
+                {
+                    "id": v.id,
+                    "result": v.result.value,
+                    "ownership_score": v.ownership_score,
+                    "created_at": v.created_at,
+                }
+                for v in verifications
+            ],
+            "path_b": [
+                {
+                    "id": c.id,
+                    "result": c.result.value,
+                    "ownership_score": c.ownership_score,
+                    "lost_item_id": c.lost_item_id,
+                    "created_at": c.created_at,
+                }
+                for c in claims_b
+            ],
+            "path_c": [
+                {
+                    "id": c.id,
+                    "result": c.result.value,
+                    "ownership_score": c.ownership_score,
+                    "found_item_id": c.found_item_id,
+                    "created_at": c.created_at,
+                }
+                for c in claims_c
+            ],
+        },
         "reports_made": {
             "post": [{"id": r.id, "reason": r.reason.value, "created_at": r.created_at} for r in reports_made_post],
             "user": [{"id": r.id, "reason": r.reason.value, "created_at": r.created_at} for r in reports_made_user],
@@ -450,6 +816,30 @@ def get_user_detail(db: Session, user_id: uuid.UUID) -> dict:
     }
 
 
+def get_fraud_detail(db: Session, user_id: uuid.UUID) -> dict:
+    from app.services.fraud_service import BLOCK_THRESHOLD, get_risk_tier
+
+    detail = get_user_detail(db, user_id)
+    override = detail["profile"].get("fraud_verification_override", False)
+    score = detail["fraud_risk_score"]
+    return {
+        "user": detail["profile"],
+        "fraud_risk_score": score,
+        "fraud_risk_tier": detail["fraud_risk_tier"] or get_risk_tier(score),
+        "verification_blocked": score >= BLOCK_THRESHOLD and not override,
+        "fraud_verification_override": override,
+        "fraud_events": detail["fraud_events"],
+        "trust_score": detail["trust_score"],
+        "trust_tier": detail["trust_tier"],
+        "trust_events": detail["trust_events"],
+        "items_posted": detail["items_posted"],
+        "claims": detail["claims"],
+        "reports_made": detail["reports_made"],
+        "reports_received": detail["reports_received"],
+        "recent_actions": detail["recent_actions"],
+    }
+
+
 def get_returned_item_detail(db: Session, return_id: uuid.UUID) -> dict:
     record = db.query(ItemReturn).filter(ItemReturn.id == return_id).first()
     if not record or not record.returned_at:
@@ -458,6 +848,39 @@ def get_returned_item_detail(db: Session, return_id: uuid.UUID) -> dict:
     lost_item = db.query(Item).filter(Item.id == record.lost_item_id).first()
     found_item = db.query(Item).filter(Item.id == record.found_item_id).first()
     owner = _user_brief(db, record.lost_owner_id)
+    finder = _user_brief(db, record.found_owner_id)
+
+    match = (
+        db.query(PotentialMatch)
+        .filter(PotentialMatch.id == record.potential_match_id)
+        .first()
+    )
+    path, _, _ = _detect_claim_path(db, match) if match else ("path_a", None, None)
+    approval_score = float(match.match_score) if match and match.match_score is not None else None
+
+    tip_payload: dict
+    tip_row = (
+        db.query(TipPayment)
+        .filter(
+            TipPayment.return_id == record.id,
+            TipPayment.status == TipPaymentStatus.SUCCESS,
+        )
+        .order_by(TipPayment.paid_at.desc())
+        .first()
+    )
+    if tip_row:
+        from app.services import tipping_service
+
+        tip_detail = tipping_service.admin_tip_detail(db, tip_row)
+        tip_payload = {
+            "tipped": True,
+            "amount_ghs": tip_detail["amount_ghs"],
+            "currency": tip_detail["currency"],
+            "paid_at": tip_detail["paid_at"],
+            "status": tip_detail["status"],
+        }
+    else:
+        tip_payload = {"tipped": False, "message": "No tip sent"}
 
     dispute_open = bool(
         record.dispute_filed_at
@@ -471,80 +894,29 @@ def get_returned_item_detail(db: Session, return_id: uuid.UUID) -> dict:
 
     method_label = None
     if record.method:
-        method_label = {
-            "dual_confirm": "Dual confirmation",
-            "qr_scan": "QR code scan",
-            "handover": "Authority handover",
-        }.get(record.method.value, record.method.value)
-
-    handover_detail = None
-    claim_detail = None
-    drop_point_name = None
-    date_dropped_off = None
-    if found_item and found_item.drop_point_id:
-        dp = db.query(DropPoint).filter(DropPoint.id == found_item.drop_point_id).first()
-        drop_point_name = dp.name if dp else None
-    if found_item and found_item.authority_received_at:
-        date_dropped_off = found_item.authority_received_at
-
-    if record.handover_id:
-        handover = db.query(Handover).filter(Handover.id == record.handover_id).first()
-        claim = db.query(Claim).filter(Claim.id == handover.claim_id).first() if handover else None
-        if handover:
-            student_id = None
-            if handover.claimant_student_id_encrypted:
-                student_id = decrypt(handover.claimant_student_id_encrypted)
-            handover_detail = {
-                "id": handover.id,
-                "condition_photo_url": handover.condition_photo_url,
-                "claimant_name": handover.claimant_name,
-                "claimant_phone": decrypt(handover.claimant_phone_encrypted),
-                "claimant_student_id": student_id,
-                "claimant_photo_url": handover.claimant_photo_url,
-                "owner_confirmed": handover.owner_confirmed,
-                "owner_confirmed_at": handover.owner_confirmed_at,
-                "authority_override": bool(handover.authority_override_note),
-                "authority_override_note": handover.authority_override_note,
-                "completed_at": handover.owner_confirmed_at or handover.created_at,
-            }
-        if claim:
-            claim_detail = {
-                "claim_path": claim.claim_path.value,
-                "ai_confidence_score": claim.ai_confidence_score,
-            }
-
-    finder_brief = _user_brief(db, record.found_owner_id)
-    if not finder_brief and found_item and not found_item.posted_by_id:
-        finder_brief = {
-            "id": None,
-            "username": None,
-            "full_name": "Anonymous finder",
-            "email": None,
-            "status": None,
-            "role": None,
-        }
+        method_label = (
+            "Dual confirmation"
+            if record.method.value == "dual_confirm"
+            else "QR code scan"
+        )
 
     return {
         "return_id": record.id,
-        "lost_item": _item_detail(db, lost_item if lost_item and lost_item.id != found_item.id else None),
+        "lost_item": _item_detail(db, lost_item),
         "found_item": _item_detail(db, found_item),
         "owner": owner,
-        "finder": finder_brief,
-        "location_lost": lost_item.location_label if lost_item and lost_item.id != found_item.id else None,
+        "finder": finder,
+        "location_lost": lost_item.location_label if lost_item else None,
         "location_found": found_item.location_label if found_item else None,
-        "date_lost": lost_item.date_occurred if lost_item and lost_item.id != found_item.id else None,
+        "date_lost": lost_item.date_occurred if lost_item else None,
         "date_found": found_item.date_occurred if found_item else None,
-        "date_posted": found_item.created_at if found_item else None,
-        "date_dropped_off": date_dropped_off,
         "date_returned": record.returned_at,
-        "drop_point_name": drop_point_name,
         "return_method": method_label,
-        "handover": handover_detail,
-        "claim": claim_detail,
+        "verification_path": path,
+        "approval_score": approval_score,
+        "tip": tip_payload,
         "dispute": {
-            "had_dispute": bool(
-                record.dispute_filed_at or record.dispute_resolved_at or record.admin_review_flagged
-            ),
+            "had_dispute": bool(record.dispute_filed_at or record.dispute_resolved_at or record.admin_review_flagged),
             "open": dispute_open,
             "dispute_type": dispute_type,
             "return_id": record.id,
@@ -552,279 +924,8 @@ def get_returned_item_detail(db: Session, return_id: uuid.UUID) -> dict:
             "resolved_at": record.dispute_resolved_at,
             "reason": record.dispute_reason,
             "resolution_note": record.dispute_resolution_note,
+            "tip_frozen": record.tip_frozen,
         },
+        "chat_history": _chat_for_match(db, record.potential_match_id),
         "can_open_dispute": not dispute_open,
-    }
-
-
-def _authority_brief(db: Session, authority_id: uuid.UUID | str | None) -> dict | None:
-    if not authority_id:
-        return None
-    aid = uuid.UUID(str(authority_id)) if not isinstance(authority_id, uuid.UUID) else authority_id
-    auth = db.query(Authority).filter(Authority.id == aid).first()
-    if not auth:
-        return None
-    dp = db.query(DropPoint).filter(DropPoint.id == auth.drop_point_id).first()
-    return {
-        "authority_id": auth.id,
-        "email": auth.email,
-        "drop_point_name": dp.name if dp else None,
-    }
-
-
-def _handover_detail_dict(handover: Handover) -> dict:
-    student_id = None
-    if handover.claimant_student_id_encrypted:
-        student_id = decrypt(handover.claimant_student_id_encrypted)
-    return {
-        "id": handover.id,
-        "condition_photo_url": handover.condition_photo_url,
-        "claimant_name": handover.claimant_name,
-        "claimant_phone": decrypt(handover.claimant_phone_encrypted),
-        "claimant_student_id": student_id,
-        "claimant_photo_url": handover.claimant_photo_url,
-        "owner_confirmed": handover.owner_confirmed,
-        "owner_confirmed_at": handover.owner_confirmed_at,
-        "authority_override": bool(handover.authority_override_note),
-        "authority_override_note": handover.authority_override_note,
-        "completed_at": handover.owner_confirmed_at or handover.created_at,
-    }
-
-
-def get_claim_overview_detail(db: Session, found_item_id: uuid.UUID) -> dict:
-    """Full claim evidence for admin Claims Overview detail panel."""
-    item = (
-        db.query(Item)
-        .options(joinedload(Item.drop_point))
-        .filter(Item.id == found_item_id, Item.item_type == ItemType.FOUND)
-        .first()
-    )
-    if not item:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found.")
-
-    claims = (
-        db.query(Claim)
-        .options(joinedload(Claim.claimant))
-        .filter(Claim.found_item_id == found_item_id)
-        .order_by(Claim.created_at.asc())
-        .all()
-    )
-    if not claims:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No claims found for this item.",
-        )
-
-    claim_ids = [c.id for c in claims]
-    called_rows = (
-        db.query(Notification.reference_id, Notification.created_at)
-        .filter(
-            Notification.reference_id.in_(claim_ids),
-            Notification.title == "Please come to collect",
-        )
-        .all()
-    )
-    called_map = {row[0]: row[1] for row in called_rows if row[0]}
-
-    finder = _user_brief(db, item.posted_by_id)
-    if not finder and not item.posted_by_id:
-        finder = {
-            "id": None,
-            "username": None,
-            "full_name": "Anonymous Finder",
-            "email": None,
-            "status": None,
-            "role": None,
-        }
-
-    drop_point = item.drop_point
-    drop_point_name = drop_point.name if drop_point else None
-    found_item_detail = {
-        **_item_detail(db, item),
-        "drop_point_id": item.drop_point_id,
-        "drop_point_name": drop_point_name,
-        "authority_received_at": item.authority_received_at,
-        "date_found": item.date_occurred,
-    }
-
-    claimants = []
-    for claim in claims:
-        user = claim.claimant
-        display_status = claim.status.value
-        if claim.status == ClaimStatus.PENDING and claim.id in called_map:
-            display_status = "called_to_collect"
-        claimants.append(
-            {
-                "claim_id": claim.id,
-                "username": user.username,
-                "full_name": user.full_name,
-                "trust_tier": None,
-                "description": claim.description,
-                "photo_url": claim.photo_url,
-                "date_lost": claim.date_lost,
-                "time_lost": claim.time_lost,
-                "lost_location": claim.lost_location if claim.claim_path == ClaimPath.C else None,
-                "ai_confidence_score": claim.ai_confidence_score
-                if claim.claim_path == ClaimPath.A
-                else None,
-                "claim_path": claim.claim_path.value,
-                "created_at": claim.created_at,
-                "status": claim.status.value,
-                "display_status": display_status,
-            }
-        )
-
-    claim_logs = (
-        db.query(AdminLog)
-        .filter(
-            AdminLog.target_type == "claim",
-            AdminLog.target_id.in_(claim_ids),
-        )
-        .order_by(AdminLog.created_at.asc())
-        .all()
-    )
-
-    handover = (
-        db.query(Handover)
-        .filter(Handover.item_id == found_item_id)
-        .first()
-    )
-    handover_logs: list[AdminLog] = []
-    if handover:
-        handover_logs = (
-            db.query(AdminLog)
-            .filter(
-                AdminLog.target_type == "handover",
-                AdminLog.target_id == handover.id,
-            )
-            .order_by(AdminLog.created_at.asc())
-            .all()
-        )
-
-    authority_ids: set[uuid.UUID] = set()
-    for log in claim_logs + handover_logs:
-        aid = (log.detail or {}).get("authority_id")
-        if aid:
-            authority_ids.add(uuid.UUID(str(aid)))
-    if drop_point:
-        assigned = db.query(Authority).filter(Authority.drop_point_id == drop_point.id).first()
-        if assigned:
-            authority_ids.add(assigned.id)
-
-    authorities: list[dict] = []
-    seen_auth: set[uuid.UUID] = set()
-    for aid in authority_ids:
-        if aid in seen_auth:
-            continue
-        brief = _authority_brief(db, aid)
-        if brief:
-            authorities.append(brief)
-            seen_auth.add(aid)
-
-    timeline: list[dict] = []
-    if item.authority_received_at:
-        timeline.append(
-            {
-                "event": "received_item",
-                "label": f"Item received at {drop_point_name or 'drop point'}",
-                "at": item.authority_received_at,
-                "actor": authorities[0]["email"] if authorities else None,
-            }
-        )
-
-    for claim in claims:
-        if claim.id in called_map:
-            timeline.append(
-                {
-                    "event": "called_to_collect",
-                    "label": f"Called claimant @{claim.claimant.username} to collect",
-                    "at": called_map[claim.id],
-                    "claim_id": claim.id,
-                    "actor": None,
-                }
-            )
-
-    verified_at_by_claim: dict[uuid.UUID, datetime] = {}
-    for log in claim_logs:
-        claim = next((c for c in claims if c.id == log.target_id), None)
-        username = claim.claimant.username if claim else "claimant"
-        actor = _authority_brief(db, (log.detail or {}).get("authority_id"))
-        actor_email = actor["email"] if actor else None
-
-        if log.action == AdminActionType.APPROVE_CLAIM:
-            verified_at_by_claim[log.target_id] = log.created_at
-            timeline.append(
-                {
-                    "event": "verified",
-                    "label": f"Verified claimant @{username} as owner",
-                    "at": log.created_at,
-                    "claim_id": log.target_id,
-                    "actor": actor_email,
-                }
-            )
-        elif log.action == AdminActionType.REJECT_CLAIM:
-            timeline.append(
-                {
-                    "event": "rejected",
-                    "label": f"Rejected claimant @{username}",
-                    "at": log.created_at,
-                    "claim_id": log.target_id,
-                    "actor": actor_email,
-                }
-            )
-
-    reject_logged = {
-        log.target_id
-        for log in claim_logs
-        if log.action == AdminActionType.REJECT_CLAIM
-    }
-    for claim in claims:
-        if claim.status != ClaimStatus.REJECTED or claim.id in reject_logged:
-            continue
-        verified_claim = next((c for c in claims if c.status == ClaimStatus.VERIFIED), None)
-        at = verified_at_by_claim.get(verified_claim.id) if verified_claim else None
-        timeline.append(
-            {
-                "event": "rejected",
-                "label": (
-                    f"Rejected claimant @{claim.claimant.username} "
-                    "(another claimant verified)"
-                ),
-                "at": at or claim.created_at,
-                "claim_id": claim.id,
-                "actor": None,
-            }
-        )
-
-    handover_detail = None
-    if handover:
-        handover_detail = _handover_detail_dict(handover)
-        if handover.owner_confirmed_at or handover.authority_override_note:
-            actor = _authority_brief(
-                db,
-                (handover_logs[-1].detail or {}).get("authority_id") if handover_logs else None,
-            )
-            timeline.append(
-                {
-                    "event": "handover_completed",
-                    "label": (
-                        "Handover completed"
-                        + (" (authority override)" if handover.authority_override_note else "")
-                    ),
-                    "at": handover_detail["completed_at"],
-                    "actor": actor["email"] if actor else None,
-                }
-            )
-
-    epoch = datetime.min.replace(tzinfo=timezone.utc)
-    timeline.sort(key=lambda entry: entry["at"] or epoch)
-
-    return {
-        "found_item": found_item_detail,
-        "finder": finder,
-        "claimants": claimants,
-        "authorities": authorities,
-        "timeline": timeline,
-        "handover": handover_detail,
-        "is_returned": item.status == ItemStatus.RETURNED,
     }

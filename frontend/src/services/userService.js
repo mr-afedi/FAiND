@@ -36,4 +36,9 @@ export const userService = {
     const res = await api.get(`/users/${username}`)
     return res.data
   },
+
+  async getMyTrustHistory({ skip = 0, limit = 20 } = {}) {
+    const res = await api.get('/users/me/trust-events', { params: { skip, limit } })
+    return res.data
+  },
 }

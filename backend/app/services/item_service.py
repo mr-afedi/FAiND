@@ -2,8 +2,6 @@
 Item service — business logic for Lost & Found Item Reporting (Features C & D).
 Business logic lives here; route handlers only handle request/response.
 """
-import secrets
-import string
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -11,17 +9,18 @@ from typing import Optional
 from sqlalchemy import and_, exists, or_
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.campus_zone import CampusZone
-from app.models.drop_point import DropPoint
-from app.models.item import Item, ItemStatus, ItemType
+from app.models.item import Item, ItemHiddenQuestion, ItemStatus, ItemType
 from app.models.item_return import ItemReturn
 from app.schemas.item import PublicReturnedItem, PublicReturnedListResponse
 from app.models.user import User, AccountStatus
 from app.models.university import University
 from app.models.potential_match import PotentialMatch, PotentialMatchStatus
+import app.services.trust_service as trust_service
 import app.services.matching_service as matching_service
 from app.schemas.item import (
+    CheckHiddenAnswersRequest,
     CreateLostItemRequest,
+    HiddenQuestionInput,
     UpdateLostItemRequest,
     LostItemListItem,
     LostItemListResponse,
@@ -32,20 +31,14 @@ from app.schemas.item import (
     UpdateFoundItemRequest,
     FoundItemListItem,
     FoundItemListResponse,
-    FoundItemCreateResponse,
-    FoundItemTrackResponse,
     BrowseItemPoster,
     BrowseItemCard,
     BrowseListResponse,
     HomepageResponse,
-    RecentlyReturnedItem,
 )
+from app.utils.encryption import encrypt
 from app.utils.location_utils import _resolve_location
-from app.services import drop_point_service
-from app.services import drop_off_service
-from app.services import token_service
-from app.services.authority_notification_service import notify_authority_found_item_reported
-from app.services import claim_service
+from app.services import path_b_service, path_c_service
 
 # Lost items are active for 45 days (Section 21.1)
 _LOST_ITEM_ACTIVE_DAYS = 45
@@ -53,29 +46,44 @@ _LOST_ITEM_ACTIVE_DAYS = 45
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _poster_summary(item: Item) -> ItemPosterSummary:
-    if item.posted_by:
-        return ItemPosterSummary(
-            id=item.posted_by.id,
-            display_name=item.posted_by.full_name,
-            username=item.posted_by.username,
-        )
-    return ItemPosterSummary(
-        id=item.id,
-        display_name="Anonymous finder",
-        username="anonymous",
-    )
+_OBVIOUS_ANSWER_THRESHOLD = 0.65
+
+
+def hidden_answer_warnings(
+    public_description: str,
+    hidden_questions: list[HiddenQuestionInput],
+) -> list[str]:
+    """Warn when a hidden answer is too similar to the public description (V4.3 §6.1)."""
+    warnings: list[str] = []
+    for idx, q in enumerate(hidden_questions, start=1):
+        sim = matching_service.description_similarity(public_description, q.answer)
+        if sim >= _OBVIOUS_ANSWER_THRESHOLD:
+            warnings.append(
+                f"Question {idx}: This answer might be too obvious. "
+                "Consider asking something more specific."
+            )
+    return warnings
+
+
+def check_hidden_answers(payload: CheckHiddenAnswersRequest) -> list[str]:
+    return hidden_answer_warnings(payload.public_description, payload.hidden_questions)
 
 
 def _build_owner_response(
     item: Item,
     db: Session,
     override_status: Optional[ItemStatus] = None,
+    warnings: Optional[list[str]] = None,
     *,
     already_submitted: bool = False,
     message: Optional[str] = None,
 ) -> LostItemOwnerResponse:
-    poster = _poster_summary(item)
+    poster = ItemPosterSummary(
+        id=item.posted_by.id,
+        display_name=item.posted_by.full_name,
+        username=item.posted_by.username,
+        trust_tier=trust_service.get_trust_tier(item.posted_by.trust_score),
+    )
     return LostItemOwnerResponse(
         id=item.id,
         item_type=item.item_type,
@@ -91,6 +99,7 @@ def _build_owner_response(
         extensions_used=item.extensions_used,
         created_at=item.created_at,
         posted_by=poster,
+        warnings=warnings or [],
         already_submitted=already_submitted,
         message=message,
     )
@@ -100,9 +109,17 @@ def _build_public_response(
     item: Item,
     mask_match_status: bool = False,
     show_as_matched: bool = False,
-    viewer_claim=None,
+    viewer_path_b_status: Optional[str] = None,
+    viewer_path_b_conversation_id: Optional[uuid.UUID] = None,
+    viewer_path_c_status: Optional[str] = None,
+    viewer_path_c_conversation_id: Optional[uuid.UUID] = None,
 ) -> LostItemPublicResponse:
-    poster = _poster_summary(item)
+    poster = ItemPosterSummary(
+        id=item.posted_by.id,
+        display_name=item.posted_by.full_name,
+        username=item.posted_by.username,
+        trust_tier=trust_service.get_trust_tier(item.posted_by.trust_score),
+    )
     # Section 10 — match/verification statuses are private; only owners see them on their post.
     # show_as_matched=True  → party viewer sees POTENTIAL_MATCH (not under_verification)
     # mask_match_status=True → non-party sees normal open/found feed status
@@ -140,7 +157,10 @@ def _build_public_response(
         extensions_used=item.extensions_used,
         created_at=item.created_at,
         posted_by=poster,
-        viewer_claim=viewer_claim,
+        viewer_path_b_status=viewer_path_b_status,
+        viewer_path_b_conversation_id=viewer_path_b_conversation_id,
+        viewer_path_c_status=viewer_path_c_status,
+        viewer_path_c_conversation_id=viewer_path_c_conversation_id,
     )
 
 
@@ -252,6 +272,8 @@ def create_lost_item(
 
     expiry = datetime.now(timezone.utc) + timedelta(days=_LOST_ITEM_ACTIVE_DAYS)
 
+    warnings = hidden_answer_warnings(payload.public_description, payload.hidden_questions)
+
     item = Item(
         university_id=current_user.university_id,
         posted_by_id=current_user.id,
@@ -267,8 +289,19 @@ def create_lost_item(
         image_urls=payload.image_urls,
         expiry_date=expiry,
     )
-    matching_service.attach_description_embedding(item)
     db.add(item)
+    db.flush()
+
+    for idx, q in enumerate(payload.hidden_questions, start=1):
+        db.add(
+            ItemHiddenQuestion(
+                item_id=item.id,
+                question=encrypt(q.question),
+                answer=encrypt(q.answer),
+                position=idx,
+            )
+        )
+
     db.commit()
 
     item = (
@@ -277,7 +310,7 @@ def create_lost_item(
         .filter(Item.id == item.id)
         .one()
     )
-    return _build_owner_response(item, db)
+    return _build_owner_response(item, db, warnings=warnings)
 
 
 # ── Read ─────────────────────────────────────────────────────────────────────
@@ -294,7 +327,7 @@ def get_item_detail(
     """
     item: Optional[Item] = (
         db.query(Item)
-        .options(joinedload(Item.posted_by))
+        .options(joinedload(Item.posted_by), joinedload(Item.hidden_questions))
         .filter(Item.id == item_id)
         .first()
     )
@@ -307,9 +340,8 @@ def get_item_detail(
     if item.status == ItemStatus.ARCHIVED:
         raise LookupError("Item not found")
 
-    # Look up any live match involving this item — used for both owner and
+    # Look up any active match involving this item — used for both owner and
     # non-owner paths below to determine party membership.
-    # Anonymous finders have posted_by_id=None; never treat None as a party id.
     active_match = (
         db.query(PotentialMatch)
         .options(
@@ -319,30 +351,24 @@ def get_item_detail(
         .filter(
             PotentialMatch.status.in_([
                 PotentialMatchStatus.ACTIVE,
-                PotentialMatchStatus.PENDING_REVIEW,
                 PotentialMatchStatus.PAUSED,
-                PotentialMatchStatus.VERIFIED,
             ]),
             (PotentialMatch.lost_item_id == item.id) | (PotentialMatch.found_item_id == item.id),
         )
         .first()
     )
-    is_party = False
-    if current_user and active_match:
-        lost_poster = active_match.lost_item.posted_by_id if active_match.lost_item else None
-        found_poster = active_match.found_item.posted_by_id if active_match.found_item else None
-        is_party = (
-            current_user.id == lost_poster
-            or (found_poster is not None and current_user.id == found_poster)
-        )
+    party_ids = (
+        {active_match.lost_item.posted_by_id, active_match.found_item.posted_by_id}
+        if active_match else set()
+    )
 
     if is_owner:
         # Found items stay "found" in the DB even when matched — show Path A match
-        # status to the owner.
+        # status to the owner. Lost posts stay OPEN for Path B/C (potential_match is Path A only).
         override = (
             ItemStatus.POTENTIAL_MATCH
             if active_match
-            and is_party
+            and current_user.id in party_ids
             and matching_service.is_ai_potential_match(active_match)
             else None
         )
@@ -356,22 +382,30 @@ def get_item_detail(
 
     # Non-owner: party members always see POTENTIAL_MATCH badge (even on found items
     # whose DB status is "found"). Everyone else gets the masked status.
+    is_party = current_user is not None and current_user.id in party_ids
 
-    viewer_claim = None
-    if (
-        current_user
-        and item.item_type == ItemType.FOUND
-        and not is_owner
-    ):
-        viewer_claim = claim_service.get_viewer_claim_for_found_item(
-            db, current_user, item.id
-        )
+    path_b_status: Optional[str] = None
+    path_b_conv: Optional[uuid.UUID] = None
+    path_c_status: Optional[str] = None
+    path_c_conv: Optional[uuid.UUID] = None
+    if current_user and item.posted_by_id != current_user.id:
+        if item.item_type == ItemType.LOST:
+            path_b_status, path_b_conv = path_b_service.resolve_viewer_path_b_status(
+                db, current_user.id, item.id
+            )
+        elif item.item_type == ItemType.FOUND:
+            path_c_status, path_c_conv = path_c_service.resolve_viewer_path_c_status(
+                db, current_user.id, item.id
+            )
 
     return _build_public_response(
         item,
         show_as_matched=is_party and active_match is not None,
         mask_match_status=not is_party,
-        viewer_claim=viewer_claim,
+        viewer_path_b_status=path_b_status,
+        viewer_path_b_conversation_id=path_b_conv,
+        viewer_path_c_status=path_c_status,
+        viewer_path_c_conversation_id=path_c_conv,
     )
 
 
@@ -386,6 +420,7 @@ def list_my_lost_items(
         .filter(
             Item.posted_by_id == current_user.id,
             Item.item_type == ItemType.LOST,
+            Item.path_c_bridge == False,
             Item.status.notin_([ItemStatus.ARCHIVED, ItemStatus.CLOSED]),
         )
         .order_by(Item.created_at.desc())
@@ -451,7 +486,7 @@ def update_lost_item(
 
     item = (
         db.query(Item)
-        .options(joinedload(Item.posted_by))
+        .options(joinedload(Item.posted_by), joinedload(Item.hidden_questions))
         .filter(Item.id == item.id)
         .one()
     )
@@ -494,7 +529,7 @@ def extend_lost_item(
     """Extend expiry by 30 days. Max 2 extensions (Section 21.1)."""
     item: Optional[Item] = (
         db.query(Item)
-        .options(joinedload(Item.posted_by))
+        .options(joinedload(Item.posted_by), joinedload(Item.hidden_questions))
         .filter(Item.id == item_id, Item.posted_by_id == current_user.id)
         .first()
     )
@@ -515,7 +550,7 @@ def extend_lost_item(
 
     item = (
         db.query(Item)
-        .options(joinedload(Item.posted_by))
+        .options(joinedload(Item.posted_by), joinedload(Item.hidden_questions))
         .filter(Item.id == item.id)
         .one()
     )
@@ -524,243 +559,50 @@ def extend_lost_item(
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Feature D — Found Item Reporting
-# Found items: no private description, image mandatory,
+# Found items: no private description, no hidden questions, image mandatory,
 # initial status FOUND, active 21 days (Section 7, Section 21.2).
+# +2 trust points wired in Feature E (TrustService not yet built).
 # ═══════════════════════════════════════════════════════════════════════════
 
 _FOUND_ITEM_ACTIVE_DAYS = 21
-_FOUND_EDIT_WINDOW_MINUTES = 30
-_TRACKING_REF_ALPHABET = string.ascii_uppercase + string.digits
-_FOUND_LOCKED_STATUSES = frozenset({
-    ItemStatus.AT_DROPPOINT,
-    ItemStatus.UNCONFIRMED,
-    ItemStatus.RETURNED,
-    ItemStatus.ARCHIVED,
-    ItemStatus.CLOSED,
-})
 
 
-def _generate_tracking_reference(db: Session) -> str:
-    for _ in range(32):
-        ref = "".join(secrets.choice(_TRACKING_REF_ALPHABET) for _ in range(8))
-        exists_ref = (
-            db.query(Item.id)
-            .filter(Item.tracking_reference == ref)
-            .first()
-        )
-        if not exists_ref:
-            return ref
-    raise RuntimeError("Could not generate a unique tracking reference")
-
-
-def _found_edit_window_ends_at(item: Item) -> datetime:
-    return item.created_at + timedelta(minutes=_FOUND_EDIT_WINDOW_MINUTES)
-
-
-def _found_item_edit_state(item: Item) -> tuple[bool, int]:
-    """Return (can_edit, minutes_remaining)."""
-    if item.status in _FOUND_LOCKED_STATUSES:
-        return False, 0
-    if item.authority_received_at:
-        return False, 0
-    ends_at = _found_edit_window_ends_at(item)
-    now = datetime.now(timezone.utc)
-    if now >= ends_at:
-        return False, 0
-    remaining = int((ends_at - now).total_seconds() // 60) + 1
-    return True, max(remaining, 0)
-
-
-def _resolve_drop_point(
-    db: Session,
-    *,
-    university_id: uuid.UUID,
-    location_lat: float,
-    location_lng: float,
-    override_drop_point_id: Optional[uuid.UUID],
-) -> DropPoint:
-    if override_drop_point_id:
-        point = (
-            db.query(DropPoint)
-            .filter(
-                DropPoint.id == override_drop_point_id,
-                DropPoint.university_id == university_id,
-            )
-            .first()
-        )
-        if not point:
-            raise ValueError("Drop point not found for this university")
-        return point
-
-    result = drop_point_service.get_nearest_drop_point(
-        db, location_lat, location_lng, university_id
-    )
-    nearest_id = result["nearest"]["id"]
-    point = db.query(DropPoint).filter(DropPoint.id == nearest_id).first()
-    if not point:
-        raise ValueError("Could not resolve nearest drop point")
-    return point
-
-
-def _build_found_create_response(
-    db: Session,
-    item: Item,
-    drop_point: DropPoint,
-    *,
-    escrow_token_plain: Optional[str] = None,
-) -> FoundItemCreateResponse:
-    can_edit, _ = _found_item_edit_state(item)
-    ends_at = _found_edit_window_ends_at(item)
-    instruction = (
-        f"Please drop this item off at {drop_point.name} within 48 hours. "
-        "Thank you for helping a fellow student!"
-    )
-    return FoundItemCreateResponse(
-        id=item.id,
-        item_type=item.item_type,
-        status=item.status,
-        category=item.category,
-        public_description=item.public_description,
-        location_label=item.location_label,
-        location_lat=item.location_lat,
-        location_lng=item.location_lng,
-        date_occurred=item.date_occurred,
-        image_urls=item.image_urls or [],
-        expiry_date=item.expiry_date,
-        extensions_used=item.extensions_used,
-        created_at=item.created_at,
-        tracking_reference=item.tracking_reference or "",
-        drop_point_id=drop_point.id,
-        drop_point_name=drop_point.name,
-        instruction_message=instruction,
-        can_edit=can_edit,
-        edit_window_ends_at=ends_at,
-        drop_off=drop_off_service.build_drop_off_info(item),
-        token_escrow=token_service.build_token_escrow_info(
-            db, item, escrow_token_plain=escrow_token_plain
-        ),
-    )
-
-
-def _build_found_track_response(
-    db: Session,
-    item: Item,
-    drop_point: DropPoint,
-    *,
-    escrow_token_plain: Optional[str] = None,
-) -> FoundItemTrackResponse:
-    can_edit, minutes_remaining = _found_item_edit_state(item)
-    data = _build_found_create_response(
-        db, item, drop_point, escrow_token_plain=escrow_token_plain
-    ).model_dump()
-    data["can_edit"] = can_edit
-    data["minutes_remaining"] = minutes_remaining
-    return FoundItemTrackResponse(**data)
-
-
-def _authorize_found_item_edit(
-    item: Item,
-    *,
-    current_user: Optional[User] = None,
-    tracking_reference: Optional[str] = None,
-) -> None:
-    if current_user and item.posted_by_id and item.posted_by_id == current_user.id:
-        return
-    if tracking_reference and item.tracking_reference:
-        if item.tracking_reference.upper() == tracking_reference.strip().upper():
-            return
-    raise LookupError("Item not found")
-
-
-def _apply_found_item_update(
-    db: Session,
-    item: Item,
-    payload: UpdateFoundItemRequest,
-    university_id: uuid.UUID,
-) -> None:
-    can_edit, _ = _found_item_edit_state(item)
-    if not can_edit:
-        if item.status == ItemStatus.UNCONFIRMED:
-            raise ValueError("This item is no longer accepting edits or drop-off")
-        if item.status == ItemStatus.AT_DROPPOINT:
-            raise ValueError("This item has already been received at the drop point and cannot be edited")
-        raise ValueError("The 30-minute edit window has closed")
-
-    if payload.category is not None:
-        item.category = payload.category
-    if payload.public_description is not None:
-        item.public_description = payload.public_description
-    if payload.date_occurred is not None:
-        item.date_occurred = payload.date_occurred
-    if payload.image_urls is not None:
-        item.image_urls = payload.image_urls
-    if payload.location_id is not None:
-        label, lat, lng, zone_id = _resolve_location(db, payload.location_id, university_id)
-        if lat is None or lng is None:
-            raise ValueError("Campus location must have coordinates for found items")
-        item.location_id = zone_id
-        item.location_label = label
-        item.location_lat = lat
-        item.location_lng = lng
+def _build_found_response(item: Item) -> LostItemPublicResponse:
+    """Found items have no owner-only fields — public response is the owner response."""
+    return _build_public_response(item)
 
 
 def create_found_item(
     db: Session,
+    current_user: User,
     payload: CreateFoundItemRequest,
-    current_user: Optional[User] = None,
-) -> FoundItemCreateResponse:
-    if current_user is not None:
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        daily_count = (
-            db.query(Item)
-            .filter(Item.posted_by_id == current_user.id, Item.created_at >= today_start)
-            .count()
-        )
-        if daily_count >= 10:
-            raise ValueError("You have reached the daily limit of 10 item posts")
-        university_id = current_user.university_id
-    else:
-        university_id = None
-
-    zone = (
-        db.query(CampusZone)
-        .filter(CampusZone.id == payload.location_id, CampusZone.is_active == True)
-        .first()
+) -> LostItemPublicResponse:
+    # Per-user daily rate limit: max 10 posts / day (Section 30.5)
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    daily_count = (
+        db.query(Item)
+        .filter(Item.posted_by_id == current_user.id, Item.created_at >= today_start)
+        .count()
     )
-    if not zone:
-        raise ValueError("Campus zone not found")
-    if university_id is None:
-        university_id = zone.university_id
+    if daily_count >= 10:
+        raise ValueError("You have reached the daily limit of 10 item posts")
 
-    label, lat, lng, zone_id = _resolve_location(db, payload.location_id, university_id)
+    label, lat, lng, zone_id = _resolve_location(db, payload.location_id, current_user.university_id)
 
-    if lat is None or lng is None:
-        raise ValueError("A campus location with coordinates is required to suggest a drop point")
-
-    if current_user is not None:
-        _assert_not_duplicate_item_post(
-            db,
-            user_id=current_user.id,
-            item_type=ItemType.FOUND,
-            category=payload.category,
-            public_description=payload.public_description,
-            zone_id=zone_id,
-        )
-
-    drop_point = _resolve_drop_point(
+    _assert_not_duplicate_item_post(
         db,
-        university_id=university_id,
-        location_lat=lat,
-        location_lng=lng,
-        override_drop_point_id=payload.drop_point_id,
+        user_id=current_user.id,
+        item_type=ItemType.FOUND,
+        category=payload.category,
+        public_description=payload.public_description,
+        zone_id=zone_id,
     )
 
     expiry = datetime.now(timezone.utc) + timedelta(days=_FOUND_ITEM_ACTIVE_DAYS)
-    tracking_ref = _generate_tracking_reference(db)
 
     item = Item(
-        university_id=university_id,
-        posted_by_id=current_user.id if current_user else None,
+        university_id=current_user.university_id,
+        posted_by_id=current_user.id,
         item_type=ItemType.FOUND,
         status=ItemStatus.FOUND,
         category=payload.category,
@@ -769,137 +611,35 @@ def create_found_item(
         location_label=label,
         location_lat=lat,
         location_lng=lng,
-        drop_point_id=drop_point.id,
-        tracking_reference=tracking_ref,
         date_occurred=payload.date_occurred,
         image_urls=payload.image_urls,
         expiry_date=expiry,
     )
-    matching_service.attach_description_embedding(item)
     db.add(item)
     db.flush()
 
-    drop_off_service.assign_dropoff_qr(item)
-
-    award = token_service.award_found_item_posted(
-        db,
-        item,
-        user=current_user,
-        escrow_token=payload.escrow_token,
-    )
-
-    notify_authority_found_item_reported(db, item=item, drop_point=drop_point)
+    for idx, q in enumerate(payload.hidden_questions, start=1):
+        db.add(
+            ItemHiddenQuestion(
+                item_id=item.id,
+                question=encrypt(q.question),
+                answer=encrypt(q.answer),
+                position=idx,
+            )
+        )
 
     db.commit()
 
     item = (
         db.query(Item)
-        .options(joinedload(Item.posted_by), joinedload(Item.drop_point))
+        .options(joinedload(Item.posted_by))
         .filter(Item.id == item.id)
         .one()
     )
-    return _build_found_create_response(
-        db,
-        item,
-        drop_point,
-        escrow_token_plain=award.escrow_token,
-    )
-
-
-def get_found_item_by_tracking_reference(
-    db: Session,
-    tracking_reference: str,
-    *,
-    escrow_token_plain: Optional[str] = None,
-) -> FoundItemTrackResponse:
-    ref = tracking_reference.strip().upper()
-    item = (
-        db.query(Item)
-        .options(joinedload(Item.drop_point))
-        .filter(
-            Item.tracking_reference == ref,
-            Item.item_type == ItemType.FOUND,
-        )
-        .first()
-    )
-    if not item or not item.drop_point:
-        raise LookupError("Item not found")
-    drop_off_service.ensure_dropoff_qr(item)
-    db.flush()
-    return _build_found_track_response(
-        db, item, item.drop_point, escrow_token_plain=escrow_token_plain
-    )
-
-
-def get_found_item_track_by_id(
-    db: Session,
-    item_id: uuid.UUID,
-    *,
-    escrow_token_plain: Optional[str] = None,
-) -> FoundItemTrackResponse:
-    item = (
-        db.query(Item)
-        .options(joinedload(Item.drop_point))
-        .filter(Item.id == item_id, Item.item_type == ItemType.FOUND)
-        .first()
-    )
-    if not item or not item.drop_point:
-        raise LookupError("Item not found")
-    drop_off_service.ensure_dropoff_qr(item)
-    db.flush()
-    return _build_found_track_response(
-        db, item, item.drop_point, escrow_token_plain=escrow_token_plain
-    )
-
-
-def get_found_item_track_for_owner(
-    db: Session,
-    item_id: uuid.UUID,
-    current_user: User,
-) -> FoundItemTrackResponse:
-    """Authenticated finder track view — owner or matching tracking ref holder."""
-    item = (
-        db.query(Item)
-        .options(joinedload(Item.drop_point))
-        .filter(Item.id == item_id, Item.item_type == ItemType.FOUND)
-        .first()
-    )
-    if not item or not item.drop_point:
-        raise LookupError("Item not found")
-    if not item.posted_by_id or item.posted_by_id != current_user.id:
-        raise LookupError("Item not found")
-    return _build_found_track_response(db, item, item.drop_point)
-
-
-def update_found_item_by_tracking_reference(
-    db: Session,
-    tracking_reference: str,
-    payload: UpdateFoundItemRequest,
-) -> FoundItemTrackResponse:
-    ref = tracking_reference.strip().upper()
-    item = (
-        db.query(Item)
-        .options(joinedload(Item.drop_point))
-        .filter(
-            Item.tracking_reference == ref,
-            Item.item_type == ItemType.FOUND,
-        )
-        .first()
-    )
-    if not item or not item.drop_point:
-        raise LookupError("Item not found")
-
-    _authorize_found_item_edit(item, tracking_reference=ref)
-    _apply_found_item_update(db, item, payload, item.university_id)
+    # +2 trust for posting a found item (Section 17.1 / Feature E)
+    trust_service.award_found_item_posted(db, current_user.id, item.id)
     db.commit()
-
-    item = (
-        db.query(Item)
-        .options(joinedload(Item.drop_point))
-        .filter(Item.id == item.id)
-        .one()
-    )
-    return _build_found_track_response(db, item, item.drop_point)
+    return _build_found_response(item)
 
 
 def list_my_found_items(
@@ -913,6 +653,8 @@ def list_my_found_items(
         .filter(
             Item.posted_by_id == current_user.id,
             Item.item_type == ItemType.FOUND,
+            Item.path_b_bridge == False,
+            Item.path_c_bridge == False,
             Item.status.notin_([ItemStatus.ARCHIVED, ItemStatus.CLOSED]),
         )
         .order_by(Item.created_at.desc())
@@ -939,11 +681,6 @@ def list_my_found_items(
     )
 
 
-def _build_found_response(item: Item) -> LostItemPublicResponse:
-    """Found items have no owner-only fields — public response is the owner response."""
-    return _build_public_response(item)
-
-
 def update_found_item(
     db: Session,
     item_id: uuid.UUID,
@@ -962,13 +699,29 @@ def update_found_item(
     if not item:
         raise LookupError("Item not found")
 
-    _authorize_found_item_edit(item, current_user=current_user)
-    _apply_found_item_update(db, item, payload, current_user.university_id)
+    if item.status not in (ItemStatus.FOUND, ItemStatus.POTENTIAL_MATCH):
+        raise ValueError("Only active found items can be edited")
+
+    if payload.category is not None:
+        item.category = payload.category
+    if payload.public_description is not None:
+        item.public_description = payload.public_description
+    if payload.date_occurred is not None:
+        item.date_occurred = payload.date_occurred
+    if payload.image_urls is not None:
+        item.image_urls = payload.image_urls
+    if payload.location_id is not None:
+        label, lat, lng, zone_id = _resolve_location(db, payload.location_id, current_user.university_id)
+        item.location_id = zone_id
+        item.location_label = label
+        item.location_lat = lat
+        item.location_lng = lng
+
     db.commit()
 
     item = (
         db.query(Item)
-        .options(joinedload(Item.posted_by))
+        .options(joinedload(Item.posted_by), joinedload(Item.hidden_questions))
         .filter(Item.id == item.id)
         .one()
     )
@@ -1009,7 +762,7 @@ def extend_found_item(
     """Extend expiry by 30 days. Max 2 extensions (Section 21.2)."""
     item: Optional[Item] = (
         db.query(Item)
-        .options(joinedload(Item.posted_by))
+        .options(joinedload(Item.posted_by), joinedload(Item.hidden_questions))
         .filter(
             Item.id == item_id,
             Item.posted_by_id == current_user.id,
@@ -1031,7 +784,7 @@ def extend_found_item(
 
     item = (
         db.query(Item)
-        .options(joinedload(Item.posted_by))
+        .options(joinedload(Item.posted_by), joinedload(Item.hidden_questions))
         .filter(Item.id == item.id)
         .one()
     )
@@ -1044,10 +797,7 @@ def extend_found_item(
 _VISIBLE_STATUSES = [
     ItemStatus.OPEN,
     ItemStatus.FOUND,
-    ItemStatus.OVERDUE,
-    ItemStatus.AT_DROPPOINT,
     ItemStatus.POTENTIAL_MATCH,
-    ItemStatus.UNDER_CLAIM_REVIEW,
     ItemStatus.UNDER_VERIFICATION,
     ItemStatus.UNDER_DISPUTE,
 ]
@@ -1075,31 +825,26 @@ def _public_feed_filters():
         Item.status.in_(_VISIBLE_STATUSES),
         Item.status.notin_(_TERMINAL_PUBLIC_STATUSES),
         ~completed_return,
+        Item.path_b_bridge == False,
+        Item.path_c_bridge == False,
         Item.hidden_by_suspension == False,
-        or_(
-            Item.posted_by_id.is_(None),
-            User.status == AccountStatus.ACTIVE,
-        ),
+        User.status == AccountStatus.ACTIVE,
     )
 
 
 def _build_browse_card(
     item: Item,
     viewer_matched_ids: Optional[set] = None,
-    viewer_claim=None,
+    path_b_viewer: Optional[tuple[str | None, uuid.UUID | None]] = None,
+    path_c_viewer: Optional[tuple[str | None, uuid.UUID | None]] = None,
+    chat_unlocked_ids: Optional[set] = None,
 ) -> BrowseItemCard:
-    if item.posted_by:
-        poster = BrowseItemPoster(
-            id=item.posted_by.id,
-            username=item.posted_by.username,
-            display_name=item.posted_by.full_name or item.posted_by.username,
-        )
-    else:
-        poster = BrowseItemPoster(
-            id=item.id,
-            username="anonymous",
-            display_name="Anonymous finder",
-        )
+    poster = BrowseItemPoster(
+        id=item.posted_by.id,
+        username=item.posted_by.username,
+        display_name=item.posted_by.full_name or item.posted_by.username,
+        trust_tier=trust_service.get_trust_tier(item.posted_by.trust_score),
+    )
     # Show POTENTIAL_MATCH to the two parties involved in a match, on BOTH items
     # (lost item and found item). The found item's DB status stays "found" but
     # parties should still see the badge. Non-parties never see POTENTIAL_MATCH.
@@ -1113,13 +858,14 @@ def _build_browse_card(
         ItemStatus.POTENTIAL_MATCH,
         ItemStatus.UNDER_VERIFICATION,
         ItemStatus.UNDER_DISPUTE,
-        ItemStatus.UNDER_CLAIM_REVIEW,
     ):
         public_status = (
             ItemStatus.OPEN if item.item_type == ItemType.LOST else ItemStatus.FOUND
         )
     else:
         public_status = item.status
+    pb_status, pb_conv = path_b_viewer if path_b_viewer else (None, None)
+    pc_status, pc_conv = path_c_viewer if path_c_viewer else (None, None)
     return BrowseItemCard(
         id=item.id,
         item_type=item.item_type,
@@ -1132,7 +878,11 @@ def _build_browse_card(
         created_at=item.created_at,
         updated_at=item.updated_at,
         posted_by=poster,
-        viewer_claim=viewer_claim,
+        viewer_path_b_status=pb_status if item.item_type == ItemType.LOST else None,
+        viewer_path_b_conversation_id=pb_conv if item.item_type == ItemType.LOST else None,
+        viewer_path_c_status=pc_status if item.item_type == ItemType.FOUND else None,
+        viewer_path_c_conversation_id=pc_conv if item.item_type == ItemType.FOUND else None,
+        viewer_chat_unlocked=bool(chat_unlocked_ids and item.id in chat_unlocked_ids),
     )
 
 
@@ -1149,7 +899,8 @@ def browse_items(
     skip: int = 0,
     limit: int = 20,
     viewer_matched_ids: Optional[set] = None,
-    viewer_user: Optional[User] = None,
+    viewer_id: Optional[uuid.UUID] = None,
+    chat_unlocked_ids: Optional[set] = None,
 ) -> BrowseListResponse:
     """
     Public browse feed — no auth required.
@@ -1157,7 +908,7 @@ def browse_items(
     """
     query = (
         db.query(Item)
-        .outerjoin(Item.posted_by)
+        .join(Item.posted_by)
         .options(joinedload(Item.posted_by))
         .filter(*_public_feed_filters())
     )
@@ -1188,17 +939,22 @@ def browse_items(
 
     items = query.offset(skip).limit(limit).all()
 
-    found_ids = [i.id for i in items if i.item_type == ItemType.FOUND]
-    viewer_claims = claim_service.get_viewer_claims_for_found_items(
-        db, viewer_user, found_ids
-    )
+    path_b_map: dict[uuid.UUID, tuple[str | None, uuid.UUID | None]] = {}
+    path_c_map: dict[uuid.UUID, tuple[str | None, uuid.UUID | None]] = {}
+    if viewer_id:
+        lost_ids = [i.id for i in items if i.item_type == ItemType.LOST and i.posted_by_id != viewer_id]
+        found_ids = [i.id for i in items if i.item_type == ItemType.FOUND and i.posted_by_id != viewer_id]
+        path_b_map = path_b_service.resolve_viewer_path_b_statuses_batch(db, viewer_id, lost_ids)
+        path_c_map = path_c_service.resolve_viewer_path_c_statuses_batch(db, viewer_id, found_ids)
 
     return BrowseListResponse(
         items=[
             _build_browse_card(
                 i,
                 viewer_matched_ids,
-                viewer_claim=viewer_claims.get(i.id),
+                path_b_map.get(i.id),
+                path_c_map.get(i.id),
+                chat_unlocked_ids,
             )
             for i in items
         ],
@@ -1211,7 +967,7 @@ def browse_items(
 def get_homepage_data(
     db: Session,
     viewer_matched_ids: Optional[set] = None,
-    viewer_user: Optional[User] = None,
+    viewer_id: Optional[uuid.UUID] = None,
 ) -> HomepageResponse:
     """
     Lightweight homepage snapshot — 5 latest lost, 5 latest found,
@@ -1220,7 +976,7 @@ def get_homepage_data(
     def _active_query(type_filter: ItemType):
         return (
             db.query(Item)
-            .outerjoin(Item.posted_by)
+            .join(Item.posted_by)
             .options(joinedload(Item.posted_by))
             .filter(
                 Item.item_type == type_filter,
@@ -1233,52 +989,49 @@ def get_homepage_data(
 
     latest_lost = _active_query(ItemType.LOST)
     latest_found = _active_query(ItemType.FOUND)
-    found_ids = [i.id for i in latest_found]
-    viewer_claims = claim_service.get_viewer_claims_for_found_items(
-        db, viewer_user, found_ids
-    )
 
     seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
     returned_filter = (
         ItemReturn.returned_at.isnot(None),
         ItemReturn.returned_at >= seven_days_ago,
+        Item.status == ItemStatus.RETURNED,
     )
     recently_returned_count = (
         db.query(ItemReturn)
-        .join(Item, Item.id == ItemReturn.found_item_id)
-        .filter(*returned_filter, Item.status == ItemStatus.RETURNED)
+        .join(Item, Item.id == ItemReturn.lost_item_id)
+        .filter(*returned_filter)
         .count()
     )
-    recently_returned_rows = (
-        db.query(ItemReturn, Item, University)
-        .join(Item, Item.id == ItemReturn.found_item_id)
-        .join(University, University.id == ItemReturn.university_id)
-        .filter(*returned_filter, Item.status == ItemStatus.RETURNED)
-        .order_by(ItemReturn.returned_at.desc())
-        .limit(6)
-        .all()
-    )
-    recently_returned = [
-        RecentlyReturnedItem(
-            id=record.id,
-            category=found_item.category,
-            returned_at=record.returned_at,
-            university_short_name=university.short_name,
+
+    path_b_map: dict[uuid.UUID, tuple[str | None, uuid.UUID | None]] = {}
+    path_c_map: dict[uuid.UUID, tuple[str | None, uuid.UUID | None]] = {}
+    chat_unlocked_ids: set[uuid.UUID] = set()
+    if viewer_id:
+        from app.services.matching_service import get_chat_unlocked_item_ids
+
+        lost_ids = [i.id for i in latest_lost if i.posted_by_id != viewer_id]
+        found_ids = [i.id for i in latest_found if i.posted_by_id != viewer_id]
+        path_b_map = path_b_service.resolve_viewer_path_b_statuses_batch(
+            db, viewer_id, lost_ids
         )
-        for record, found_item, university in recently_returned_rows
-    ]
+        path_c_map = path_c_service.resolve_viewer_path_c_statuses_batch(
+            db, viewer_id, found_ids
+        )
+        chat_unlocked_ids = get_chat_unlocked_item_ids(db, viewer_id)
 
     return HomepageResponse(
-        latest_lost=[_build_browse_card(i, viewer_matched_ids) for i in latest_lost],
+        latest_lost=[
+            _build_browse_card(
+                i, viewer_matched_ids, path_b_map.get(i.id), None, chat_unlocked_ids,
+            )
+            for i in latest_lost
+        ],
         latest_found=[
             _build_browse_card(
-                i,
-                viewer_matched_ids,
-                viewer_claim=viewer_claims.get(i.id),
+                i, viewer_matched_ids, None, path_c_map.get(i.id), chat_unlocked_ids,
             )
             for i in latest_found
         ],
-        recently_returned=recently_returned,
         recently_returned_count=recently_returned_count,
     )
 
@@ -1301,7 +1054,7 @@ def list_public_returned_items(
     seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
     base = (
         db.query(ItemReturn, Item, University)
-        .join(Item, Item.id == ItemReturn.found_item_id)
+        .join(Item, Item.id == ItemReturn.lost_item_id)
         .join(University, University.id == ItemReturn.university_id)
         .filter(
             ItemReturn.returned_at.isnot(None),
@@ -1318,12 +1071,13 @@ def list_public_returned_items(
     )
     items = [
         PublicReturnedItem(
-            id=record.id,
-            category=found_item.category,
-            item_name="",
+            id=item.id,
+            category=item.category,
+            item_name=_public_returned_item_name(item),
             returned_at=record.returned_at,
             university_short_name=university.short_name,
+            finder_tipped=record.appreciation_sent_at is not None,
         )
-        for record, found_item, university in rows
+        for record, item, university in rows
     ]
     return PublicReturnedListResponse(items=items, total=total)

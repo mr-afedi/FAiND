@@ -125,6 +125,10 @@ class UserReport(Base):
         nullable=False,
     )
     detail_text: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    context_conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     status: Mapped[ReportStatus] = mapped_column(
         Enum(ReportStatus, values_callable=lambda x: [e.value for e in x]),
         default=ReportStatus.PENDING,

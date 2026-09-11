@@ -1,5 +1,5 @@
 """
-Returned items lifecycle — dispute window and archiving (Section 16, Feature N).
+Returned items lifecycle — tipping window, disputes, tip-freeze (Section 16, Feature N).
 """
 from __future__ import annotations
 
@@ -11,10 +11,11 @@ from sqlalchemy.orm import Session
 
 from app.models.item import Item, ItemStatus
 from app.models.item_return import ItemReturn
-from app.models.user import User
+from app.models.user import User, UserRole, AccountStatus
+from app.models.notification import NotificationType
 from app.services import notification_service
 
-RETURN_WINDOW_DAYS = 7
+SKIP_APPRECIATION_HOURS = 24
 
 
 def _days_left(ends_at: datetime | None, now: datetime) -> int:
@@ -23,23 +24,26 @@ def _days_left(ends_at: datetime | None, now: datetime) -> int:
     return max(0, (ends_at - now).days + (1 if (ends_at - now).seconds else 0))
 
 
-def _dispute_window_end(record: ItemReturn) -> datetime | None:
-    if not record.returned_at:
-        return None
-    if record.dispute_window_ends_at:
-        return record.dispute_window_ends_at
-    return record.returned_at + timedelta(days=RETURN_WINDOW_DAYS)
-
-
 def is_dispute_active(record: ItemReturn) -> bool:
     return record.dispute_filed_at is not None and record.dispute_resolved_at is None
+
+
+def tipping_window_open(record: ItemReturn, now: datetime) -> bool:
+    if not record.returned_at or is_dispute_active(record):
+        return False
+    if record.appreciation_sent_at:
+        return False
+    if record.tipping_window_ends_at and record.tipping_window_ends_at <= now:
+        return False
+    if record.appreciation_skipped_until and record.appreciation_skipped_until > now:
+        return False
+    return bool(record.tipping_window_ends_at and record.tipping_window_ends_at > now)
 
 
 def dispute_window_open(record: ItemReturn, now: datetime) -> bool:
     if not record.returned_at or is_dispute_active(record):
         return False
-    window_end = _dispute_window_end(record)
-    return bool(window_end and window_end > now)
+    return bool(record.dispute_window_ends_at and record.dispute_window_ends_at > now)
 
 
 def build_lifecycle_flags(
@@ -47,15 +51,46 @@ def build_lifecycle_flags(
     viewer: User,
     now: datetime | None = None,
 ) -> dict:
-    """Computed dispute flags for detail responses."""
+    """Computed Section 16.3–16.4 flags for detail/list responses."""
     now = now or datetime.now(timezone.utc)
+    is_lost_owner = viewer.id == record.lost_owner_id
+    dispute_active = is_dispute_active(record)
+    tip_open = tipping_window_open(record, now)
     disp_open = dispute_window_open(record, now)
+
     return {
+        "tipping_window_open": tip_open,
         "dispute_window_open": disp_open,
-        "dispute_active": is_dispute_active(record),
-        "dispute_days_left": _days_left(_dispute_window_end(record), now) if disp_open else 0,
+        "dispute_active": dispute_active,
+        "appreciation_sent": record.appreciation_sent_at is not None,
+        "appreciation_skipped_until": record.appreciation_skipped_until,
+        "tip_frozen": record.tip_frozen,
+        "tipping_days_left": _days_left(record.tipping_window_ends_at, now) if tip_open else 0,
+        "dispute_days_left": _days_left(record.dispute_window_ends_at, now) if disp_open else 0,
+        "can_send_appreciation": is_lost_owner and tip_open and not record.tip_frozen,
+        "can_skip_appreciation": is_lost_owner and tip_open,
         "can_dispute": disp_open,
+        "chat_read_only": record.returned_at is not None,
     }
+
+
+def skip_appreciation(db: Session, return_id: uuid.UUID, user: User) -> ItemReturn:
+    record = _get_return_for_user(db, return_id, user)
+    if user.id != record.lost_owner_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the lost item owner can skip appreciation.",
+        )
+    now = datetime.now(timezone.utc)
+    if not tipping_window_open(record, now):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The appreciation window is not open.",
+        )
+    record.appreciation_skipped_until = now + timedelta(hours=SKIP_APPRECIATION_HOURS)
+    db.commit()
+    db.refresh(record)
+    return record
 
 
 def file_dispute(
@@ -84,6 +119,9 @@ def file_dispute(
     record.dispute_reason = reason
     record.admin_review_flagged = True
 
+    if record.appreciation_sent_at:
+        record.tip_frozen = True
+
     lost = db.query(Item).filter(Item.id == record.lost_item_id).first()
     found = db.query(Item).filter(Item.id == record.found_item_id).first()
     if lost:
@@ -97,10 +135,13 @@ def file_dispute(
         db,
         record=record,
         filed_by_id=user.id,
+        tip_frozen=record.tip_frozen,
     )
     from app.services import admin_notification_service
 
     admin_notification_service.notify_admins_return_disputed(db, return_id=record.id)
+    if record.tip_frozen:
+        notify_admins_dispute_with_tip(db, record)
     db.commit()
     db.refresh(record)
     return record
@@ -127,14 +168,32 @@ def is_return_chat_readonly(db: Session, potential_match_id: uuid.UUID) -> bool:
     return record is not None
 
 
+def mark_appreciation_sent(db: Session, return_id: uuid.UUID) -> ItemReturn:
+    """Called by TippingService when Paystack payment succeeds."""
+    record = db.query(ItemReturn).filter(ItemReturn.id == return_id).first()
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Return not found.")
+    now = datetime.now(timezone.utc)
+    record.appreciation_sent_at = now
+    record.appreciation_skipped_until = None
+    record.summary_note = "The owner expressed appreciation to the finder."
+    db.commit()
+    db.refresh(record)
+    return record
+
+
 def archive_completed_returns(db: Session) -> int:
     """
-    Section 16.7 — RETURNED → ARCHIVED after dispute window closes (no open dispute).
+    Section 16.7 — RETURNED → ARCHIVED after 7-day windows close (no open dispute).
     """
     now = datetime.now(timezone.utc)
     rows = (
         db.query(ItemReturn)
-        .filter(ItemReturn.returned_at.isnot(None))
+        .filter(
+            ItemReturn.returned_at.isnot(None),
+            ItemReturn.tipping_window_ends_at.isnot(None),
+            ItemReturn.tipping_window_ends_at < now,
+        )
         .all()
     )
     count = 0
@@ -142,9 +201,6 @@ def archive_completed_returns(db: Session) -> int:
         if record.dispute_filed_at and not record.dispute_resolved_at:
             continue
         if record.admin_review_flagged and not record.dispute_resolved_at:
-            continue
-        window_end = _dispute_window_end(record)
-        if not window_end or window_end >= now:
             continue
         for item_id in (record.lost_item_id, record.found_item_id):
             item = db.query(Item).filter(Item.id == item_id).first()
@@ -155,3 +211,32 @@ def archive_completed_returns(db: Session) -> int:
     if count:
         db.commit()
     return count
+
+
+def notify_admins_dispute_with_tip(db: Session, record: ItemReturn) -> None:
+    """Section 16.5 — flag admins when a tip exists on a disputed return."""
+    admins = (
+        db.query(User)
+        .filter(
+            User.university_id == record.university_id,
+            User.role.in_((UserRole.ROOT_ADMIN, UserRole.ASSISTANT_ROOT_ADMIN, UserRole.UNIVERSITY_ADMIN)),
+            User.status == AccountStatus.ACTIVE,
+        )
+        .all()
+    )
+    body = (
+        "A return dispute was filed and an appreciation payment may need review. "
+        f"Return ID: {record.id}"
+    )
+    link = f"admin:disputes:{record.id}"
+    for admin in admins:
+        notification_service.create_notification(
+            db,
+            admin.id,
+            NotificationType.GENERAL,
+            title="Disputed return with tip",
+            body=body,
+            link=link,
+            reference_id=record.id,
+        )
+    db.flush()

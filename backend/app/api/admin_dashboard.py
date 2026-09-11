@@ -3,17 +3,19 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import require_admin_access, require_root_admin_access, require_redemption_admin_access
+from app.core.deps import require_admin_access, require_root_admin_access
 from app.models.user import User
 from app.schemas.admin import (
     AdminGateResponse,
     PlatformAnalytics,
     AdminUsersResponse,
     AdminUserListItem,
+    ClaimsQueueResponse,
+    ClaimQueueItem,
     DisputesQueueResponse,
     DisputeQueueItem,
     PostsModerationResponse,
@@ -22,39 +24,22 @@ from app.schemas.admin import (
     AdminLogItem,
     AdminActionResult,
     AdminDetailResponse,
+    PromoteAdminRequest,
     SuspendUserRequest,
     ResolveDisputeRequest,
+    ResolveVerificationDisputeRequest,
+    RejectClaimRequest,
     ForceClosePostRequest,
+    RequestMoreInfoRequest,
+    TrustAdjustRequest,
     LockDisputeItemRequest,
     EscalateDisputeRequest,
     AdminSearchResponse,
     ReturnedItemsResponse,
     ReturnedItemListItem,
     OpenReturnDisputeRequest,
-    AdminClaimsOverviewResponse,
-    AdminClaimOverviewItem,
 )
-from app.schemas.admin_drop_point import (
-    AdminDropPointListResponse,
-    AdminDropPointListItem,
-    CreateDropPointRequest,
-    UpdateDropPointRequest,
-)
-from app.schemas.authority import (
-    AuthorityListItem,
-    AuthorityListResponse,
-    CreateAuthorityRequest,
-    ReassignAuthorityRequest,
-)
-from app.schemas.token import TokenSettingsResponse, TokenSettingsUpdate
-from app.schemas.redemption import RedemptionLookupRequest, RedemptionLookupResponse
-from app.schemas.supervisor import (
-    CreateSupervisorRequest,
-    SupervisorListResponse,
-    SupervisorListItem,
-    UpdateSupervisorRequest,
-)
-from app.services import admin_dashboard_service, admin_detail_service, admin_drop_point_service, authority_service, token_settings_service, redemption_service, supervisor_service
+from app.services import admin_dashboard_service, admin_detail_service
 
 router = APIRouter(prefix="/admin", tags=["admin-dashboard"])
 
@@ -91,6 +76,8 @@ def list_users(
     search: Optional[str] = None,
     role: Optional[str] = None,
     status: Optional[str] = None,
+    trust_tier: Optional[str] = None,
+    fraud_tier: Optional[str] = None,
     limit: int = Query(100, ge=1, le=200),
     offset: int = Query(0, ge=0),
     admin: User = Depends(require_admin_access),
@@ -101,6 +88,8 @@ def list_users(
         search=search,
         role=role,
         status=status,
+        trust_tier=trust_tier,
+        fraud_tier=fraud_tier,
         limit=limit,
         offset=offset,
     )
@@ -129,6 +118,96 @@ def unsuspend_user(
 ):
     admin_dashboard_service.unsuspend_user(db, user_id, admin)
     return AdminActionResult(message="User unsuspended.")
+
+
+@router.post("/users/{user_id}/trust-adjust", response_model=AdminActionResult)
+def trust_adjust_user(
+    user_id: uuid.UUID,
+    payload: TrustAdjustRequest,
+    admin: User = Depends(require_admin_access),
+    db: Session = Depends(get_db),
+):
+    return AdminActionResult(
+        **admin_dashboard_service.adjust_user_trust(
+            db, user_id, admin, delta=payload.delta, reason=payload.reason
+        )
+    )
+
+
+@router.get("/claims", response_model=ClaimsQueueResponse)
+def claims_queue(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    path: Optional[str] = None,
+    score_min: Optional[float] = None,
+    score_max: Optional[float] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    university_id: Optional[uuid.UUID] = None,
+    sort: str = Query("created_at_asc"),
+    admin: User = Depends(require_admin_access),
+    db: Session = Depends(get_db),
+):
+    data = admin_dashboard_service.list_claims_queue(
+        db,
+        limit=limit,
+        offset=offset,
+        path=path,
+        score_min=score_min,
+        score_max=score_max,
+        date_from=date_from,
+        date_to=date_to,
+        university_id=university_id,
+        sort=sort,
+    )
+    return ClaimsQueueResponse(
+        claims=[ClaimQueueItem.model_validate(r) for r in data["claims"]],
+        total=data["total"],
+    )
+
+
+@router.post("/claims/{match_id}/approve", response_model=AdminActionResult)
+def approve_claim(
+    match_id: uuid.UUID,
+    admin: User = Depends(require_admin_access),
+    db: Session = Depends(get_db),
+):
+    return AdminActionResult(**admin_dashboard_service.approve_claim(db, match_id, admin))
+
+
+@router.post("/claims/{match_id}/reject", response_model=AdminActionResult)
+def reject_claim(
+    match_id: uuid.UUID,
+    payload: RejectClaimRequest,
+    admin: User = Depends(require_admin_access),
+    db: Session = Depends(get_db),
+):
+    return AdminActionResult(
+        **admin_dashboard_service.reject_claim(db, match_id, admin, payload.note)
+    )
+
+
+@router.post("/claims/{match_id}/request-info", response_model=AdminActionResult)
+def request_claim_info(
+    match_id: uuid.UUID,
+    payload: RequestMoreInfoRequest,
+    admin: User = Depends(require_admin_access),
+    db: Session = Depends(get_db),
+):
+    return AdminActionResult(
+        **admin_dashboard_service.request_more_info_claim(
+            db, match_id, admin, payload.note
+        )
+    )
+
+
+@router.get("/claims/{match_id}", response_model=AdminDetailResponse)
+def claim_detail(
+    match_id: uuid.UUID,
+    _admin: User = Depends(require_admin_access),
+    db: Session = Depends(get_db),
+):
+    return AdminDetailResponse(detail=admin_detail_service.get_claim_detail(db, match_id))
 
 
 @router.get("/disputes", response_model=DisputesQueueResponse)
@@ -168,6 +247,24 @@ def resolve_dispute(
             return_id,
             admin,
             outcome=payload.outcome,
+            note=payload.note,
+        )
+    )
+
+
+@router.post("/disputes/verification/{match_id}/resolve", response_model=AdminActionResult)
+def resolve_verification_dispute(
+    match_id: uuid.UUID,
+    payload: ResolveVerificationDisputeRequest,
+    admin: User = Depends(require_admin_access),
+    db: Session = Depends(get_db),
+):
+    return AdminActionResult(
+        **admin_dashboard_service.resolve_verification_dispute(
+            db,
+            match_id,
+            admin,
+            winner_match_id=payload.winner_match_id,
             note=payload.note,
         )
     )
@@ -234,6 +331,15 @@ def user_detail(
     return AdminDetailResponse(detail=admin_detail_service.get_user_detail(db, user_id))
 
 
+@router.get("/fraud/{user_id}/detail", response_model=AdminDetailResponse)
+def fraud_detail(
+    user_id: uuid.UUID,
+    _admin: User = Depends(require_admin_access),
+    db: Session = Depends(get_db),
+):
+    return AdminDetailResponse(detail=admin_detail_service.get_fraud_detail(db, user_id))
+
+
 @router.get("/returns", response_model=ReturnedItemsResponse)
 def returned_items(
     limit: int = Query(20, ge=1, le=100),
@@ -242,6 +348,7 @@ def returned_items(
     university_id: Optional[uuid.UUID] = None,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
+    tipped: Optional[bool] = None,
     sort: str = Query("returned_at_desc"),
     admin: User = Depends(require_admin_access),
     db: Session = Depends(get_db),
@@ -254,6 +361,7 @@ def returned_items(
         university_id=university_id,
         date_from=date_from,
         date_to=date_to,
+        tipped=tipped,
         sort=sort,
     )
     return ReturnedItemsResponse(
@@ -337,7 +445,7 @@ def remove_post(
 
 
 @router.post("/posts/{item_id}/force-close", response_model=AdminActionResult)
-def remove_post_force_close(
+def force_close_post(
     item_id: uuid.UUID,
     payload: ForceClosePostRequest,
     admin: User = Depends(require_admin_access),
@@ -370,174 +478,21 @@ def admin_logs(
     return AdminLogsResponse(logs=[AdminLogItem.model_validate(r) for r in rows])
 
 
-@router.get("/claims", response_model=AdminClaimsOverviewResponse)
-def claims_overview(
+@router.post("/admins/promote", response_model=AdminActionResult)
+def promote_admin(
+    payload: PromoteAdminRequest,
     root: User = Depends(require_root_admin_access),
     db: Session = Depends(get_db),
 ):
-    rows = admin_dashboard_service.list_claims_overview(db)
-    return AdminClaimsOverviewResponse(
-        items=[AdminClaimOverviewItem.model_validate(r) for r in rows]
-    )
+    admin_dashboard_service.promote_assistant_admin(db, payload.user_id, root)
+    return AdminActionResult(message="User promoted to assistant root admin.")
 
 
-@router.get("/claims/{found_item_id}", response_model=AdminDetailResponse)
-def claim_overview_detail(
-    found_item_id: uuid.UUID,
+@router.post("/admins/{user_id}/demote", response_model=AdminActionResult)
+def demote_admin(
+    user_id: uuid.UUID,
     root: User = Depends(require_root_admin_access),
     db: Session = Depends(get_db),
 ):
-    return AdminDetailResponse(
-        detail=admin_detail_service.get_claim_overview_detail(db, found_item_id)
-    )
-
-
-@router.get("/drop-points", response_model=AdminDropPointListResponse)
-def list_admin_drop_points(
-    root: User = Depends(require_root_admin_access),
-    db: Session = Depends(get_db),
-):
-    rows = admin_drop_point_service.list_all_drop_points(db)
-    return AdminDropPointListResponse(
-        drop_points=[AdminDropPointListItem.model_validate(r) for r in rows]
-    )
-
-
-@router.post("/drop-points", response_model=AdminDropPointListItem, status_code=status.HTTP_201_CREATED)
-def create_admin_drop_point(
-    payload: CreateDropPointRequest,
-    root: User = Depends(require_root_admin_access),
-    db: Session = Depends(get_db),
-):
-    result = admin_drop_point_service.create_drop_point(db, root, payload)
-    db.commit()
-    return result
-
-
-@router.patch("/drop-points/{drop_point_id}", response_model=AdminDropPointListItem)
-def update_admin_drop_point(
-    drop_point_id: uuid.UUID,
-    payload: UpdateDropPointRequest,
-    root: User = Depends(require_root_admin_access),
-    db: Session = Depends(get_db),
-):
-    result = admin_drop_point_service.update_drop_point(db, root, drop_point_id, payload)
-    db.commit()
-    return result
-
-
-@router.get("/authorities", response_model=AuthorityListResponse)
-def list_authorities(
-    root: User = Depends(require_root_admin_access),
-    db: Session = Depends(get_db),
-):
-    return AuthorityListResponse(authorities=authority_service.list_authority_accounts(db))
-
-
-@router.post("/authorities", response_model=AuthorityListItem, status_code=status.HTTP_201_CREATED)
-def create_authority(
-    payload: CreateAuthorityRequest,
-    root: User = Depends(require_root_admin_access),
-    db: Session = Depends(get_db),
-):
-    result = authority_service.create_authority_account(db, payload, actor=root)
-    db.commit()
-    return result
-
-
-@router.patch("/authorities/{authority_id}/reassign", response_model=AuthorityListItem)
-def reassign_authority(
-    authority_id: uuid.UUID,
-    payload: ReassignAuthorityRequest,
-    root: User = Depends(require_root_admin_access),
-    db: Session = Depends(get_db),
-):
-    result = authority_service.reassign_authority(
-        db, authority_id, payload.drop_point_id, root
-    )
-    db.commit()
-    return result
-
-
-@router.patch("/authorities/{authority_id}/deactivate", response_model=AuthorityListItem)
-def deactivate_authority(
-    authority_id: uuid.UUID,
-    root: User = Depends(require_root_admin_access),
-    db: Session = Depends(get_db),
-):
-    result = authority_service.set_authority_active(db, authority_id, active=False, actor=root)
-    db.commit()
-    return result
-
-
-@router.patch("/authorities/{authority_id}/activate", response_model=AuthorityListItem)
-def activate_authority(
-    authority_id: uuid.UUID,
-    root: User = Depends(require_root_admin_access),
-    db: Session = Depends(get_db),
-):
-    result = authority_service.set_authority_active(db, authority_id, active=True, actor=root)
-    db.commit()
-    return result
-
-
-@router.get("/token-settings", response_model=TokenSettingsResponse)
-def get_token_settings(
-    root: User = Depends(require_root_admin_access),
-    db: Session = Depends(get_db),
-):
-    return token_settings_service.to_response(token_settings_service.get_settings(db))
-
-
-@router.patch("/token-settings", response_model=TokenSettingsResponse)
-def update_token_settings(
-    payload: TokenSettingsUpdate,
-    root: User = Depends(require_root_admin_access),
-    db: Session = Depends(get_db),
-):
-    result = token_settings_service.update_settings(db, root, payload)
-    db.commit()
-    return result
-
-
-@router.post("/redemption/lookup", response_model=RedemptionLookupResponse)
-def redemption_lookup(
-    payload: RedemptionLookupRequest,
-    admin: User = Depends(require_redemption_admin_access),
-    db: Session = Depends(get_db),
-):
-    result = redemption_service.lookup_and_redeem_code(db, payload.code, admin=admin)
-    db.commit()
-    return result
-
-
-@router.get("/supervisors", response_model=SupervisorListResponse)
-def list_supervisors(
-    root: User = Depends(require_root_admin_access),
-    db: Session = Depends(get_db),
-):
-    rows = supervisor_service.list_supervisors(db)
-    return SupervisorListResponse(supervisors=rows)
-
-
-@router.post("/supervisors", response_model=SupervisorListItem, status_code=status.HTTP_201_CREATED)
-def create_supervisor(
-    payload: CreateSupervisorRequest,
-    root: User = Depends(require_root_admin_access),
-    db: Session = Depends(get_db),
-):
-    result = supervisor_service.create_supervisor(db, payload, actor=root)
-    db.commit()
-    return result
-
-
-@router.patch("/supervisors/{supervisor_id}", response_model=SupervisorListItem)
-def update_supervisor(
-    supervisor_id: uuid.UUID,
-    payload: UpdateSupervisorRequest,
-    root: User = Depends(require_root_admin_access),
-    db: Session = Depends(get_db),
-):
-    result = supervisor_service.update_supervisor(db, supervisor_id, payload, actor=root)
-    db.commit()
-    return result
+    admin_dashboard_service.demote_assistant_admin(db, user_id, root)
+    return AdminActionResult(message="Assistant admin demoted to regular user.")

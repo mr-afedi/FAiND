@@ -3,11 +3,9 @@
  * Section 11.5: clicking marks read and navigates to relevant page.
  */
 import { useState, useRef, useEffect } from 'react'
-import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../context/AuthContext'
-import useIsMobile from '../hooks/useIsMobile'
 import {
   getMyNotifications,
   markNotificationRead,
@@ -16,93 +14,9 @@ import {
   clearDeletableNotifications,
 } from '../services/matchService'
 import { getItemDetail } from '../services/itemService'
-import { invalidateAfterNotificationChange } from '../utils/queryCache'
 import { NotificationTypeIcon, Bell, Trash2 } from './icons'
-import ExpandableText from './ExpandableText'
 
 const ITEM_LINK_RE = /^\/items\/([0-9a-f-]{36})$/i
-
-function NotificationsPanel({
-  unreadCount,
-  deletableCount,
-  isLoading,
-  notifications,
-  onClearAll,
-  clearPending,
-  onMarkAll,
-  markAllPending,
-  onNotificationClick,
-  onDelete,
-  deletePending,
-  onViewAll,
-  className = '',
-}) {
-  return (
-    <div className={`overflow-hidden flex flex-col ${className}`}>
-      <div className="flex items-center justify-between px-4 py-3
-                      border-b border-slate-100 dark:border-slate-800">
-        <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">Notifications</h3>
-        <div className="flex items-center gap-3">
-          {deletableCount > 0 && (
-            <button
-              type="button"
-              onClick={onClearAll}
-              disabled={clearPending}
-              className="text-xs text-slate-500 dark:text-slate-400 hover:text-red-600
-                         dark:hover:text-red-400 hover:underline disabled:opacity-50"
-            >
-              Clear all
-            </button>
-          )}
-          {unreadCount > 0 && (
-            <button
-              type="button"
-              onClick={onMarkAll}
-              disabled={markAllPending}
-              className="text-xs text-blue-600 dark:text-blue-400 hover:underline
-                         disabled:opacity-50"
-            >
-              Mark all as read
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div className="overflow-y-auto flex-1">
-        {isLoading ? (
-          <div className="flex justify-center py-10">
-            <div className="w-6 h-6 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
-          </div>
-        ) : notifications.length === 0 ? (
-          <div className="py-10 text-center text-sm text-slate-400">
-            <Bell className="w-8 h-8 mx-auto mb-2 opacity-50" aria-hidden />
-            No notifications yet
-          </div>
-        ) : (
-          notifications.map((notif) => (
-            <NotificationRow
-              key={notif.id}
-              notif={notif}
-              onNavigate={onNotificationClick}
-              onDelete={onDelete}
-              isDeleting={deletePending}
-            />
-          ))
-        )}
-      </div>
-
-      <div className="border-t border-slate-100 dark:border-slate-800 px-4 py-2.5">
-        <button
-          type="button"
-          onClick={onViewAll}
-          className="text-xs text-blue-600 dark:text-blue-400 hover:underline w-full text-center"
-        >
-          View all in Dashboard →
-        </button>
-      </div>
-    </div>
-  )
-}
 
 function timeAgo(isoString) {
   const diff = Date.now() - new Date(isoString).getTime()
@@ -114,7 +28,12 @@ function timeAgo(isoString) {
   return `${Math.floor(hrs / 24)}d ago`
 }
 
+/** Approximate two lines of text-xs in the notification panel */
+const BODY_TWO_LINE_CHARS = 100
+
 function NotificationRow({ notif, onNavigate, onDelete, isDeleting }) {
+  const [expanded, setExpanded] = useState(false)
+  const canExpand = (notif.body?.length ?? 0) > BODY_TWO_LINE_CHARS
   const isDimmed = !notif.deletable && notif.read
 
   const handleRowClick = () => {
@@ -150,10 +69,25 @@ function NotificationRow({ notif, onNavigate, onDelete, isDeleting }) {
         >
           {notif.title}
         </p>
-        <ExpandableText
-          text={notif.body}
-          className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 break-words"
-        />
+        <p
+          className={`text-xs text-slate-500 dark:text-slate-400 mt-0.5 break-words
+                      ${expanded ? '' : 'line-clamp-2'}`}
+        >
+          {notif.body}
+        </p>
+        {canExpand && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              setExpanded((v) => !v)
+            }}
+            className="text-xs font-medium text-blue-600 dark:text-blue-400
+                       hover:underline mt-1"
+          >
+            {expanded ? 'Show less' : 'Read more'}
+          </button>
+        )}
         <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
           {timeAgo(notif.created_at)}
         </p>
@@ -187,18 +121,16 @@ export default function NotificationDropdown() {
   const { isAuthenticated, authReady } = useAuth()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const isMobile = useIsMobile()
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
 
   useEffect(() => {
-    if (isMobile) return undefined
     const handler = (e) => {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
-  }, [isMobile])
+  }, [])
 
   const { data } = useQuery({
     queryKey: ['notifications-unread'],
@@ -221,22 +153,34 @@ export default function NotificationDropdown() {
 
   const markReadMutation = useMutation({
     mutationFn: markNotificationRead,
-    onSuccess: () => invalidateAfterNotificationChange(queryClient),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
+      queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
+    },
   })
 
   const markAllMutation = useMutation({
     mutationFn: markAllNotificationsRead,
-    onSuccess: () => invalidateAfterNotificationChange(queryClient),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
+      queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
+    },
   })
 
   const deleteMutation = useMutation({
     mutationFn: deleteNotification,
-    onSuccess: () => invalidateAfterNotificationChange(queryClient),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
+      queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
+    },
   })
 
   const clearAllMutation = useMutation({
     mutationFn: clearDeletableNotifications,
-    onSuccess: () => invalidateAfterNotificationChange(queryClient),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications-unread'] })
+      queryClient.invalidateQueries({ queryKey: ['notifications-list'] })
+    },
   })
 
   const handleNotificationClick = async (notif) => {
@@ -260,25 +204,9 @@ export default function NotificationDropdown() {
 
   if (!isAuthenticated) return null
 
-  const panelProps = {
-    unreadCount,
-    deletableCount,
-    isLoading,
-    notifications,
-    onClearAll: () => clearAllMutation.mutate(),
-    clearPending: clearAllMutation.isPending,
-    onMarkAll: () => markAllMutation.mutate(),
-    markAllPending: markAllMutation.isPending,
-    onNotificationClick: handleNotificationClick,
-    onDelete: (id) => deleteMutation.mutate(id),
-    deletePending: deleteMutation.isPending,
-    onViewAll: () => { setOpen(false); navigate('/dashboard?tab=pending') },
-  }
-
   return (
     <div className="relative" ref={ref}>
       <button
-        type="button"
         onClick={() => setOpen((o) => !o)}
         className="w-9 h-9 rounded-xl flex items-center justify-center relative
                    text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800
@@ -295,31 +223,75 @@ export default function NotificationDropdown() {
         )}
       </button>
 
-      {open && isMobile && createPortal(
-        <>
-          <button
-            type="button"
-            className="fixed inset-0 z-[9998] bg-black/30 md:hidden"
-            aria-label="Close notifications"
-            onClick={() => setOpen(false)}
-          />
-          <NotificationsPanel
-            {...panelProps}
-            className="fixed z-[9999] left-0 right-0 w-full max-h-[calc(100vh-4rem)]
-                       top-16 rounded-none border-t border-slate-200/80 dark:border-slate-700/60
-                       bg-white dark:bg-slate-900 shadow-xl md:hidden"
-          />
-        </>,
-        document.body
+      {open && (
+        <div
+          className="absolute right-0 mt-2 w-80 sm:w-96 max-h-[70vh] overflow-hidden
+                     rounded-2xl border border-slate-200/80 dark:border-slate-700/60
+                     bg-white dark:bg-slate-900 shadow-xl z-50 flex flex-col"
+        >
+          <div className="flex items-center justify-between px-4 py-3
+                          border-b border-slate-100 dark:border-slate-800">
+            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">Notifications</h3>
+            <div className="flex items-center gap-3">
+              {deletableCount > 0 && (
+                <button
+                  onClick={() => clearAllMutation.mutate()}
+                  disabled={clearAllMutation.isPending}
+                  className="text-xs text-slate-500 dark:text-slate-400 hover:text-red-600
+                             dark:hover:text-red-400 hover:underline disabled:opacity-50"
+                >
+                  Clear all
+                </button>
+              )}
+              {unreadCount > 0 && (
+                <button
+                  onClick={() => markAllMutation.mutate()}
+                  disabled={markAllMutation.isPending}
+                  className="text-xs text-blue-600 dark:text-blue-400 hover:underline
+                             disabled:opacity-50"
+                >
+                  Mark all as read
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="overflow-y-auto flex-1">
+            {isLoading ? (
+              <div className="flex justify-center py-10">
+                <div className="w-6 h-6 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : notifications.length === 0 ? (
+              <div className="py-10 text-center text-sm text-slate-400">
+                <Bell className="w-8 h-8 mx-auto mb-2 opacity-50" aria-hidden />
+                No notifications yet
+              </div>
+            ) : (
+              notifications.map((notif) => (
+                <NotificationRow
+                  key={notif.id}
+                  notif={notif}
+                  onNavigate={handleNotificationClick}
+                  onDelete={(id) => deleteMutation.mutate(id)}
+                  isDeleting={deleteMutation.isPending}
+                />
+              ))
+            )}
+          </div>
+
+          <div className="border-t border-slate-100 dark:border-slate-800 px-4 py-2.5">
+            <button
+              onClick={() => { setOpen(false); navigate('/dashboard?tab=pending') }}
+              className="text-xs text-blue-600 dark:text-blue-400 hover:underline w-full text-center"
+            >
+              View all in Dashboard →
+            </button>
+          </div>
+        </div>
       )}
 
-      {open && !isMobile && (
-        <NotificationsPanel
-          {...panelProps}
-          className="absolute right-0 mt-2 w-80 sm:w-96 max-h-[70vh]
-                     rounded-2xl border border-slate-200/80 dark:border-slate-700/60
-                     bg-white dark:bg-slate-900 shadow-xl z-50"
-        />
+      {open && (
+        <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden />
       )}
     </div>
   )

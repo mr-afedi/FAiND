@@ -61,6 +61,15 @@ export async function unsuspendUser(userId) {
   return data
 }
 
+export async function trustAdjustUser(userId, delta, reason) {
+  const { data } = await api.post(
+    `/admin/users/${userId}/trust-adjust`,
+    { delta, reason },
+    adminConfig(),
+  )
+  return data
+}
+
 export async function lockDisputeItem(disputeId, reason, disputeType) {
   const { data } = await api.post(
     `/admin/disputes/${disputeId}/lock-item`,
@@ -79,6 +88,35 @@ export async function escalateDispute(disputeId, note, disputeType) {
   return data
 }
 
+export async function listClaims(params = {}) {
+  const { data } = await api.get('/admin/claims', { ...adminConfig(), params })
+  return data
+}
+
+export async function approveClaim(matchId) {
+  const { data } = await api.post(`/admin/claims/${matchId}/approve`, {}, adminConfig())
+  return data
+}
+
+export async function rejectClaim(matchId, note) {
+  const { data } = await api.post(`/admin/claims/${matchId}/reject`, { note }, adminConfig())
+  return data
+}
+
+export async function requestClaimInfo(matchId, note) {
+  const { data } = await api.post(
+    `/admin/claims/${matchId}/request-info`,
+    { note },
+    adminConfig(),
+  )
+  return data
+}
+
+export async function getClaimDetail(matchId) {
+  const { data } = await api.get(`/admin/claims/${matchId}`, adminConfig())
+  return data.detail
+}
+
 export async function listDisputes() {
   const { data } = await api.get('/admin/disputes', adminConfig())
   return data
@@ -88,6 +126,15 @@ export async function resolveDispute(returnId, outcome, note) {
   const { data } = await api.post(
     `/admin/disputes/${returnId}/resolve`,
     { outcome, note },
+    adminConfig(),
+  )
+  return data
+}
+
+export async function resolveVerificationDispute(matchId, winnerMatchId, note) {
+  const { data } = await api.post(
+    `/admin/disputes/verification/${matchId}/resolve`,
+    { winner_match_id: winnerMatchId, note },
     adminConfig(),
   )
   return data
@@ -144,6 +191,35 @@ export async function getReportDetail(reportId, reportType) {
     ...adminConfig(),
     params: { report_type: reportType },
   })
+  return data.detail
+}
+
+export async function listFraudAlerts() {
+  const { data } = await api.get('/admin/fraud/alerts', adminConfig())
+  return data
+}
+
+export async function confirmFraud(userId) {
+  const { data } = await api.post(`/admin/fraud/users/${userId}/confirm`, {}, adminConfig())
+  return data
+}
+
+export async function clearFraudFlag(userId) {
+  const { data } = await api.post(`/admin/fraud/users/${userId}/clear`, {}, adminConfig())
+  return data
+}
+
+export async function allowVerification(userId) {
+  const { data } = await api.post(
+    `/admin/fraud/users/${userId}/allow-verification`,
+    {},
+    adminConfig(),
+  )
+  return data
+}
+
+export async function getFraudDetail(userId) {
+  const { data } = await api.get(`/admin/fraud/${userId}/detail`, adminConfig())
   return data.detail
 }
 
@@ -209,98 +285,16 @@ export async function listAdminLogs(params = {}) {
   return data
 }
 
-export async function listAuthorities() {
-  const { data } = await api.get('/admin/authorities', adminConfig())
+export async function promoteAdmin(userId) {
+  const { data } = await api.post('/admin/admins/promote', { user_id: userId }, adminConfig())
   return data
 }
 
-export async function createAuthority(payload) {
-  const { data } = await api.post('/admin/authorities', payload, adminConfig())
-  return data
-}
-
-export async function deactivateAuthority(authorityId) {
-  const { data } = await api.patch(
-    `/admin/authorities/${authorityId}/deactivate`,
-    {},
-    adminConfig(),
-  )
-  return data
-}
-
-export async function activateAuthority(authorityId) {
-  const { data } = await api.patch(
-    `/admin/authorities/${authorityId}/activate`,
-    {},
-    adminConfig(),
-  )
-  return data
-}
-
-export async function lookupRedemptionCode(code) {
-  const { data } = await api.post('/admin/redemption/lookup', { code }, adminConfig())
-  return data
-}
-
-export async function listSupervisors() {
-  const { data } = await api.get('/admin/supervisors', adminConfig())
-  return data
-}
-
-export async function createSupervisor(payload) {
-  const { data } = await api.post('/admin/supervisors', payload, adminConfig())
-  return data
-}
-
-export async function updateSupervisor(supervisorId, payload) {
-  const { data } = await api.patch(`/admin/supervisors/${supervisorId}`, payload, adminConfig())
-  return data
-}
-
-export async function listAdminDropPoints() {
-  const { data } = await api.get('/admin/drop-points', adminConfig())
-  return data
-}
-
-export async function createAdminDropPoint(payload) {
-  const { data } = await api.post('/admin/drop-points', payload, adminConfig())
-  return data
-}
-
-export async function updateAdminDropPoint(dropPointId, payload) {
-  const { data } = await api.patch(`/admin/drop-points/${dropPointId}`, payload, adminConfig())
-  return data
-}
-
-export async function listClaimsOverview() {
-  const { data } = await api.get('/admin/claims', adminConfig())
-  return data
-}
-
-export async function getClaimOverviewDetail(foundItemId) {
-  const { data } = await api.get(`/admin/claims/${foundItemId}`, adminConfig())
-  return data.detail
-}
-
-export async function reassignAuthority(authorityId, dropPointId) {
-  const { data } = await api.patch(
-    `/admin/authorities/${authorityId}/reassign`,
-    { drop_point_id: dropPointId },
-    adminConfig(),
-  )
-  return data
-}
-
-export async function getTokenSettings() {
-  const { data } = await api.get('/admin/token-settings', adminConfig())
-  return data
-}
-
-export async function updateTokenSettings(payload) {
-  const { data } = await api.patch('/admin/token-settings', payload, adminConfig())
+export async function demoteAdmin(userId) {
+  const { data } = await api.post(`/admin/admins/${userId}/demote`, {}, adminConfig())
   return data
 }
 
 export function isAdminRole(role) {
-  return role === 'root_admin'
+  return role === 'root_admin' || role === 'assistant_root_admin'
 }

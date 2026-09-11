@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models.item import Item, ItemStatus
 from app.models.user import User, AccountStatus
+from app.models.conversation import Conversation
 from app.models.report import (
     PostReport,
     UserReport,
@@ -22,8 +23,9 @@ from app.models.report import (
     AdminReportAction,
 )
 from app.schemas.report import SubmitPostReportRequest, SubmitUserReportRequest
-from app.services import notification_service
+from app.services import trust_service, fraud_service, notification_service
 from app.services import matching_service
+from app.services.trust_service import get_trust_tier
 
 _ESCALATION_DISTINCT_REPORTERS = 3
 _DUPLICATE_MSG = "You have already reported this. Each post or user can only be reported once."
@@ -117,6 +119,24 @@ def submit_user_report(
     if reported.university_id != reporter.university_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
+    if payload.conversation_id:
+        conv = (
+            db.query(Conversation)
+            .filter(Conversation.id == payload.conversation_id)
+            .first()
+        )
+        if not conv:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conversation not found.",
+            )
+        parties = {conv.lost_owner_id, conv.found_owner_id}
+        if reporter.id not in parties or reported_user_id not in parties:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not a participant in this conversation.",
+            )
+
     existing = (
         db.query(UserReport)
         .filter(
@@ -134,10 +154,26 @@ def submit_user_report(
         reported_user_id=reported_user_id,
         reason=payload.reason,
         detail_text=payload.detail_text,
+        context_conversation_id=payload.conversation_id,
         status=ReportStatus.PENDING,
     )
     db.add(report)
     db.flush()
+
+    report_count = (
+        db.query(UserReport)
+        .filter(UserReport.reported_user_id == reported_user_id)
+        .count()
+    )
+    trust_service.penalise_user_report_received(
+        db, reported_user_id, report_count, reporter_id=reporter.id
+    )
+    fraud_service.record_user_report(
+        db,
+        reported_user_id=reported_user_id,
+        report_id=report.id,
+        report_count=report_count,
+    )
 
     _maybe_escalate_user_reports(db, reported_user_id)
     db.commit()
@@ -489,6 +525,7 @@ def _serialize_post_report(r: PostReport) -> dict:
         "reporter": {
             "user_id": reporter.id,
             "display_name": reporter.full_name,
+            "trust_tier": get_trust_tier(reporter.trust_score),
             "status": reporter.status.value,
             "reports_suppressed": reporter.reports_suppressed,
         },
@@ -496,6 +533,7 @@ def _serialize_post_report(r: PostReport) -> dict:
         "target_item_description": item.public_description[:200] if item else None,
         "target_user_id": item.posted_by_id if item else None,
         "target_user_display_name": None,
+        "context_conversation_id": None,
     }
 
 
@@ -514,6 +552,7 @@ def _serialize_user_report(r: UserReport) -> dict:
         "reporter": {
             "user_id": reporter.id,
             "display_name": reporter.full_name,
+            "trust_tier": get_trust_tier(reporter.trust_score),
             "status": reporter.status.value,
             "reports_suppressed": reporter.reports_suppressed,
         },
@@ -521,4 +560,5 @@ def _serialize_user_report(r: UserReport) -> dict:
         "target_item_description": None,
         "target_user_id": r.reported_user_id,
         "target_user_display_name": target.full_name if target else None,
+        "context_conversation_id": r.context_conversation_id,
     }

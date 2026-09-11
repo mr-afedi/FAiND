@@ -11,10 +11,10 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.item import Item, ItemStatus, ItemCategory
-from app.models.drop_point import DropPoint
+from app.models.item import Item, ItemType, ItemStatus, ItemCategory
 from app.models.user import User, AccountStatus
 from app.models.potential_match import PotentialMatch, PotentialMatchStatus
+from app.models.conversation import Conversation, ConversationStatus
 from app.models.item_return import ItemReturn, ReturnMethod
 from app.schemas.return_confirmation import (
     ReturnActionResponse,
@@ -26,7 +26,7 @@ from app.schemas.return_confirmation import (
     ReturnedListResponse,
     QrGenerateResponse,
 )
-from app.services import notification_service, returned_items_service
+from app.services import trust_service, notification_service, returned_items_service, tipping_service
 
 RETURN_WINDOW_DAYS = 7
 QR_VALID_HOURS = 24
@@ -75,10 +75,13 @@ def _party(user: User) -> ReturnPartySummary:
         id=user.id,
         username=user.username,
         display_name=user.full_name or user.username,
+        trust_tier=trust_service.get_trust_tier(user.trust_score),
     )
 
 
-def _get_eligible_match(db: Session, match_id: uuid.UUID, user: User) -> PotentialMatch:
+def _get_verified_match(
+    db: Session, match_id: uuid.UUID, user: User
+) -> tuple[PotentialMatch, Conversation | None]:
     match = (
         db.query(PotentialMatch)
         .options(
@@ -94,12 +97,20 @@ def _get_eligible_match(db: Session, match_id: uuid.UUID, user: User) -> Potenti
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
     if user.id not in (match.lost_item.posted_by_id, match.found_item.posted_by_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
-    if match.status not in (PotentialMatchStatus.ACTIVE, PotentialMatchStatus.VERIFIED):
+    if match.status != PotentialMatchStatus.VERIFIED:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Return confirmation is only available for an active or verified match.",
+            detail="Return confirmation is only available after ownership verification passes.",
         )
-    return match
+    conv = (
+        db.query(Conversation)
+        .filter(
+            Conversation.potential_match_id == match.id,
+            Conversation.status == ConversationStatus.UNLOCKED,
+        )
+        .first()
+    )
+    return match, conv
 
 
 def _get_or_create_return(db: Session, match: PotentialMatch) -> ItemReturn:
@@ -134,6 +145,7 @@ def _finalize_return(
     now = datetime.now(timezone.utc)
     record.returned_at = now
     record.method = method
+    record.tipping_window_ends_at = now + timedelta(days=RETURN_WINDOW_DAYS)
     record.dispute_window_ends_at = now + timedelta(days=RETURN_WINDOW_DAYS)
 
     lost = db.query(Item).filter(Item.id == record.lost_item_id).first()
@@ -144,6 +156,10 @@ def _finalize_return(
     if found:
         found.status = ItemStatus.RETURNED
         found.updated_at = now
+
+    trust_service.award_successful_return(
+        db, record.found_owner_id, record.found_item_id
+    )
 
     notification_service.notify_item_returned(
         db,
@@ -159,7 +175,7 @@ def _finalize_return(
         .filter(PotentialMatch.id == record.potential_match_id)
         .first()
     )
-    if match and match.status in (PotentialMatchStatus.ACTIVE, PotentialMatchStatus.VERIFIED):
+    if match and match.status == PotentialMatchStatus.VERIFIED:
         match.status = PotentialMatchStatus.EXPIRED
 
 
@@ -167,6 +183,7 @@ def _build_status(
     db: Session,
     record: ItemReturn,
     match: PotentialMatch,
+    conv: Conversation | None,
     viewer: User,
 ) -> ReturnStatusResponse:
     lost = match.lost_item
@@ -192,6 +209,7 @@ def _build_status(
     return ReturnStatusResponse(
         return_id=record.id,
         match_id=match.id,
+        conversation_id=conv.id if conv else None,
         lost_item=_item_summary(lost),
         found_item=_item_summary(found),
         lost_owner=_party(lost_owner),
@@ -204,6 +222,7 @@ def _build_status(
         method=record.method,
         qr_active=qr_active,
         qr_expires_at=record.qr_expires_at,
+        tipping_window_ends_at=record.tipping_window_ends_at,
         dispute_window_ends_at=record.dispute_window_ends_at,
         can_confirm_finder=(
             not complete
@@ -238,9 +257,9 @@ def _build_status(
 def get_return_status(
     db: Session, match_id: uuid.UUID, user: User
 ) -> ReturnStatusResponse:
-    match = _get_eligible_match(db, match_id, user)
+    match, conv = _get_verified_match(db, match_id, user)
     record = _get_or_create_return(db, match)
-    return _build_status(db, record, match, user)
+    return _build_status(db, record, match, conv, user)
 
 
 def get_return_status_by_item(
@@ -253,9 +272,7 @@ def get_return_status_by_item(
             joinedload(PotentialMatch.found_item),
         )
         .filter(
-            PotentialMatch.status.in_(
-                (PotentialMatchStatus.ACTIVE, PotentialMatchStatus.VERIFIED)
-            ),
+            PotentialMatch.status == PotentialMatchStatus.VERIFIED,
             (PotentialMatch.lost_item_id == item_id) | (PotentialMatch.found_item_id == item_id),
         )
         .order_by(PotentialMatch.created_at.desc())
@@ -264,7 +281,7 @@ def get_return_status_by_item(
     if not match:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="No eligible match found for this item.",
+            detail="No verified match found for this item.",
         )
     if user.id not in (match.lost_item.posted_by_id, match.found_item.posted_by_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
@@ -274,7 +291,7 @@ def get_return_status_by_item(
 def finder_confirm_handed_over(
     db: Session, match_id: uuid.UUID, user: User
 ) -> ReturnActionResponse:
-    match = _get_eligible_match(db, match_id, user)
+    match, conv = _get_verified_match(db, match_id, user)
     if user.id != match.found_item.posted_by_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -301,14 +318,14 @@ def finder_confirm_handed_over(
         message = "Return confirmed! Both parties agreed — the item is marked as returned."
 
     db.commit()
-    status_resp = _build_status(db, record, match, user)
+    status_resp = _build_status(db, record, match, conv, user)
     return ReturnActionResponse(status=status_resp, message=message, completed=completed)
 
 
 def owner_confirm_received(
     db: Session, match_id: uuid.UUID, user: User
 ) -> ReturnActionResponse:
-    match = _get_eligible_match(db, match_id, user)
+    match, conv = _get_verified_match(db, match_id, user)
     if user.id != match.lost_item.posted_by_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -329,14 +346,14 @@ def owner_confirm_received(
         message = "Return confirmed! The item is marked as returned."
 
     db.commit()
-    status_resp = _build_status(db, record, match, user)
+    status_resp = _build_status(db, record, match, conv, user)
     return ReturnActionResponse(status=status_resp, message=message, completed=completed)
 
 
 def generate_qr_token(
     db: Session, match_id: uuid.UUID, user: User
 ) -> QrGenerateResponse:
-    match = _get_eligible_match(db, match_id, user)
+    match, conv = _get_verified_match(db, match_id, user)
     if user.id != match.found_item.posted_by_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -352,7 +369,7 @@ def generate_qr_token(
     record.qr_consumed_at = None
     db.commit()
 
-    status_resp = _build_status(db, record, match, user)
+    status_resp = _build_status(db, record, match, conv, user)
     payload = f"faind-return:{record.id}:{token}"
     return QrGenerateResponse(
         token=token,
@@ -404,6 +421,14 @@ def redeem_qr_token(db: Session, user: User, token: str) -> ReturnActionResponse
         .filter(PotentialMatch.id == record.potential_match_id)
         .first()
     )
+    conv = (
+        db.query(Conversation)
+        .filter(
+            Conversation.potential_match_id == record.potential_match_id,
+            Conversation.status == ConversationStatus.UNLOCKED,
+        )
+        .first()
+    )
 
     record.qr_consumed_at = now
     record.finder_handed_over_at = record.finder_handed_over_at or now
@@ -411,7 +436,7 @@ def redeem_qr_token(db: Session, user: User, token: str) -> ReturnActionResponse
     _finalize_return(db, record, ReturnMethod.QR_SCAN)
     db.commit()
 
-    status_resp = _build_status(db, record, match, user)
+    status_resp = _build_status(db, record, match, conv, user)
     return ReturnActionResponse(
         status=status_resp,
         message="QR scan successful — the item is marked as returned.",
@@ -432,47 +457,25 @@ def list_my_returns(db: Session, user: User) -> ReturnedListResponse:
     items: list[ReturnedListItem] = []
     for record in rows:
         is_owner = user.id == record.lost_owner_id
-        is_finder = user.id == record.found_owner_id
-        if not is_owner and not is_finder:
+        other_id = record.found_owner_id if is_owner else record.lost_owner_id
+        other = db.query(User).filter(User.id == other_id).first()
+        item_id = record.lost_item_id if is_owner else record.found_item_id
+        item = db.query(Item).filter(Item.id == item_id).first()
+        if not other or not item:
             continue
-
-        found_item = db.query(Item).filter(Item.id == record.found_item_id).first()
-        if not found_item:
-            continue
-
-        display_item = found_item
-        if is_owner and record.lost_item_id != record.found_item_id:
-            lost_item = db.query(Item).filter(Item.id == record.lost_item_id).first()
-            if lost_item:
-                display_item = lost_item
-
-        drop_point_name = None
-        if found_item.drop_point_id:
-            dp = db.query(DropPoint).filter(DropPoint.id == found_item.drop_point_id).first()
-            drop_point_name = dp.name if dp else None
-
-        other_display_name = None
-        if is_owner:
-            if record.found_owner_id:
-                other = db.query(User).filter(User.id == record.found_owner_id).first()
-                other_display_name = (other.full_name or other.username) if other else None
-            else:
-                other_display_name = "Anonymous finder"
-        else:
-            other = db.query(User).filter(User.id == record.lost_owner_id).first()
-            other_display_name = (other.full_name or other.username) if other else None
-
         items.append(
             ReturnedListItem(
                 return_id=record.id,
                 match_id=record.potential_match_id,
-                item_label=_item_label(display_item),
-                category=display_item.category,
+                item_label=_item_label(item),
+                category=item.category,
                 returned_at=record.returned_at,
-                other_user_display_name=other_display_name,
-                drop_point_name=drop_point_name,
+                other_user_display_name=other.full_name or other.username,
+                other_user_trust_tier=trust_service.get_trust_tier(other.trust_score),
                 viewer_role="lost_owner" if is_owner else "found_owner",
                 is_owner=is_owner,
+                appreciation_sent=is_owner and record.appreciation_sent_at is not None,
+                appreciation_received=(not is_owner) and record.appreciation_sent_at is not None,
                 dispute_active=returned_items_service.is_dispute_active(record),
             )
         )
@@ -488,72 +491,63 @@ def get_return_detail(
     if user.id not in (record.lost_owner_id, record.found_owner_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
 
-    lost_item = db.query(Item).filter(Item.id == record.lost_item_id).first()
-    found_item = db.query(Item).filter(Item.id == record.found_item_id).first()
-    if not lost_item or not found_item:
+    match = (
+        db.query(PotentialMatch)
+        .options(
+            joinedload(PotentialMatch.lost_item),
+            joinedload(PotentialMatch.found_item),
+        )
+        .filter(PotentialMatch.id == record.potential_match_id)
+        .first()
+    )
+    conv = (
+        db.query(Conversation)
+        .filter(Conversation.potential_match_id == record.potential_match_id)
+        .first()
+    )
+    other_id = record.found_owner_id if user.id == record.lost_owner_id else record.lost_owner_id
+    other = db.query(User).filter(User.id == other_id).first()
+    if not match or not other:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Return not found.")
 
-    match = None
-    if record.potential_match_id:
-        match = (
-            db.query(PotentialMatch)
-            .options(
-                joinedload(PotentialMatch.lost_item),
-                joinedload(PotentialMatch.found_item),
-            )
-            .filter(PotentialMatch.id == record.potential_match_id)
-            .first()
-        )
-
-    is_owner = user.id == record.lost_owner_id
-    if is_owner:
-        other_id = record.found_owner_id
-    else:
-        other_id = record.lost_owner_id
-
-    other = db.query(User).filter(User.id == other_id).first() if other_id else None
-    other_summary = _party(other) if other else ReturnPartySummary(
-        id=uuid.UUID(int=0),
-        username="anonymous",
-        display_name="Anonymous finder",
-    )
-
     now = datetime.now(timezone.utc)
+    is_owner = user.id == record.lost_owner_id
+    if tipping_service._sync_appreciation_from_success_tip(db, record):
+        db.commit()
+        db.refresh(record)
     lifecycle = returned_items_service.build_lifecycle_flags(record, user, now)
-
-    drop_point_name = None
-    if found_item.drop_point_id:
-        dp = db.query(DropPoint).filter(DropPoint.id == found_item.drop_point_id).first()
-        drop_point_name = dp.name if dp else None
-
-    detail_lost = match.lost_item if match else lost_item
-    detail_found = match.found_item if match else found_item
-
-    dates_summary = {
-        "lost": detail_lost.date_occurred.isoformat(),
-        "found": detail_found.date_occurred.isoformat(),
-        "returned": record.returned_at.isoformat(),
-    }
-    if drop_point_name:
-        dates_summary["drop_point"] = drop_point_name
-
     return ReturnedDetailResponse(
         return_id=record.id,
         match_id=record.potential_match_id,
+        conversation_id=conv.id if conv else None,
         returned_at=record.returned_at,
         method=record.method or ReturnMethod.DUAL_CONFIRM,
-        item_label=_item_label(detail_lost if is_owner else detail_found),
-        category=detail_lost.category if is_owner else detail_found.category,
-        lost_item=_item_summary(detail_lost),
-        found_item=_item_summary(detail_found),
-        other_user=other_summary,
+        item_label=_item_label(match.lost_item),
+        category=match.lost_item.category,
+        lost_item=_item_summary(match.lost_item),
+        found_item=_item_summary(match.found_item),
+        other_user=_party(other),
         viewer_role="lost_owner" if is_owner else "found_owner",
-        dates_summary=dates_summary,
+        dates_summary={
+            "lost": match.lost_item.date_occurred.isoformat(),
+            "found": match.found_item.date_occurred.isoformat(),
+            "returned": record.returned_at.isoformat(),
+        },
+        tipping_window_ends_at=record.tipping_window_ends_at,
         dispute_window_ends_at=record.dispute_window_ends_at,
         dispute_reason=record.dispute_reason if lifecycle["dispute_active"] else None,
+        paystack_ready=tipping_service.paystack_configured(),
         summary_note=record.summary_note,
+        appreciation_message=(
+            APPRECIATION_MESSAGE_FINDER
+            if not is_owner and lifecycle.get("appreciation_sent")
+            else None
+        ),
         **lifecycle,
     )
+
+
+APPRECIATION_MESSAGE_FINDER = "The owner expressed appreciation to the finder."
 
 
 def count_user_returns(db: Session, user_id: uuid.UUID) -> int:
@@ -568,7 +562,7 @@ def count_user_returns(db: Session, user_id: uuid.UUID) -> int:
 
 
 def archive_expired_returned_items(db: Session) -> int:
-    """Section 16.7 — RETURNED → ARCHIVED after dispute window closes."""
+    """Section 16.7 — RETURNED → ARCHIVED after tipping/dispute windows close."""
     return returned_items_service.archive_completed_returns(db)
 
 

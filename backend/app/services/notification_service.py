@@ -64,484 +64,287 @@ def create_notification(
 def notify_match_found(
     db: Session,
     lost_owner_id: uuid.UUID,
-    found_owner_id: uuid.UUID | None,
+    found_owner_id: uuid.UUID,
     match_id: uuid.UUID,
     lost_item_id: uuid.UUID,
     found_item_id: uuid.UUID,
     score_pct: int,
 ) -> None:
-    """Section 14.1 — AI match found: lost item owner only (Path A)."""
+    """Section 11.1 — AI match found: notify both parties in-app + push.
+
+    Each user's notification deep-links to their own item detail page so
+    they land directly on the matched item.
+    """
+    lost_title = "Potential match found!"
     lost_body = (
         f"Our AI found a {score_pct}% match for your lost item. "
-        "Tap to view the matched item and submit a claim."
+        "Tap to review and verify ownership."
     )
-    lost_link = f"/items/{found_item_id}"
+    found_title = "Your found item may match a lost post"
+    found_body = (
+        f"Our AI matched your found item ({score_pct}% confidence) "
+        "with a lost item report. The owner will be notified."
+    )
+    # Deep-link each user to their own item's detail page
+    lost_link = f"/items/{lost_item_id}"
+    found_link = f"/items/{found_item_id}"
 
     create_notification(
         db,
         user_id=lost_owner_id,
         notification_type=NotificationType.MATCH_FOUND,
-        title="Potential match found!",
+        title=lost_title,
         body=lost_body,
         link=lost_link,
         reference_id=match_id,
     )
+    create_notification(
+        db,
+        user_id=found_owner_id,
+        notification_type=NotificationType.MATCH_FOUND,
+        title=found_title,
+        body=found_body,
+        link=found_link,
+        reference_id=match_id,
+    )
     db.flush()
+
+    # Web Push layer (Section 11.3) — title is always "FAiND", body is event-specific
     _fire_push(db, user_id=lost_owner_id, title="FAiND", body=lost_body, url=lost_link)
+    _fire_push(db, user_id=found_owner_id, title="FAiND", body=found_body, url=found_link)
 
 
-def notify_interested_parties_item_at_droppoint(db: Session, *, item, drop_point) -> None:
-    """V5 — notify users who registered interest before drop-off."""
-    from app.services import item_interest_service
-
-    dp_name = drop_point.name if drop_point else "the drop point"
-    body = (
-        f"The item you were interested in has arrived at {dp_name}. "
-        "You can now submit your claim."
-    )
-    link = f"/claims/found/{item.id}?path=c"
-    for user_id in item_interest_service.list_interested_user_ids(db, item.id):
-        create_notification(
-            db,
-            user_id,
-            NotificationType.GENERAL,
-            title="Item ready to claim",
-            body=body,
-            link=link,
-            reference_id=item.id,
-        )
-        db.flush()
-        _fire_push(db, user_id, "FAiND", body, link)
-
-
-def notify_interested_parties_item_unconfirmed(db: Session, *, item) -> None:
-    """V5 — item never dropped off after 72h."""
-    from app.services import item_interest_service
-
-    body = (
-        "Unfortunately the item you were interested in was not dropped off. "
-        "Keep an eye out for new found items."
-    )
-    link = "/found"
-    for user_id in item_interest_service.list_interested_user_ids(db, item.id):
-        create_notification(
-            db,
-            user_id,
-            NotificationType.GENERAL,
-            title="Item not dropped off",
-            body=body,
-            link=link,
-            reference_id=item.id,
-        )
-        db.flush()
-        _fire_push(db, user_id, "FAiND", body, link)
-
-
-def notify_owner_claim_not_at_drop_point(
+def notify_verification_passed(
     db: Session,
-    *,
-    owner_id: uuid.UUID,
-    found_item_id: uuid.UUID,
-    claim_id: uuid.UUID,
-) -> None:
-    """Section 8.1 step 6 — owner claimed before item is at drop point."""
-    body = (
-        "Your claim is on file. This item has not been dropped off at the drop point yet. "
-        "We will notify you when it is ready for collection."
-    )
-    link = f"/items/{found_item_id}"
-    create_notification(
-        db,
-        owner_id,
-        NotificationType.CLAIM_RECEIVED,
-        title="Claim submitted — awaiting drop-off",
-        body=body,
-        link=link,
-        reference_id=claim_id,
-    )
-    db.flush()
-    _fire_push(db, owner_id, "FAiND", body, link)
-
-
-def notify_owner_claim_ready_for_collection(
-    db: Session,
-    *,
-    owner_id: uuid.UUID,
-    found_item_id: uuid.UUID,
-    claim_id: uuid.UUID,
-    drop_point,
-) -> None:
-    """Section 8.1 step 6 — item at drop point; owner should collect in person."""
-    dp_name = drop_point.name if drop_point else "the drop point"
-    hours = drop_point.operating_hours if drop_point else None
-    hours_part = f" during {hours}" if hours else ""
-    body = (
-        f"Your claim is on file. The item is at {dp_name}{hours_part}. "
-        "Please bring your student ID to collect it."
-    )
-    link = f"/items/{found_item_id}"
-    create_notification(
-        db,
-        owner_id,
-        NotificationType.CLAIM_RECEIVED,
-        title="Claim submitted — ready for collection",
-        body=body,
-        link=link,
-        reference_id=claim_id,
-    )
-    db.flush()
-    _fire_push(db, owner_id, "FAiND", body, link)
-
-
-def notify_claim_call_to_collect(
-    db: Session,
-    *,
-    claimant_id: uuid.UUID,
-    found_item_id: uuid.UUID,
-    claim_id: uuid.UUID,
-    drop_point,
-) -> None:
-    """Section 8.5 — authority calls a claimant to collect."""
-    dp_name = drop_point.name if drop_point else "the drop point"
-    hours = drop_point.operating_hours if drop_point else None
-    hours_part = f" during {hours}" if hours else ""
-    body = (
-        f"You have been called to collect your claimed item at {dp_name}{hours_part}. "
-        "Please bring your student ID."
-    )
-    link = f"/items/{found_item_id}"
-    create_notification(
-        db,
-        claimant_id,
-        NotificationType.CLAIM_RECEIVED,
-        title="Please come to collect",
-        body=body,
-        link=link,
-        reference_id=claim_id,
-    )
-    db.flush()
-    _fire_push(db, claimant_id, "FAiND", body, link)
-
-
-def notify_owner_inquiry_reply(
-    db: Session,
-    *,
-    owner_id: uuid.UUID,
-    claim_id: uuid.UUID,
-    found_item_id: uuid.UUID,
-    reply_label: str,
-) -> None:
-    """Section 13.3 — authority quick reply sent to claim owner."""
-    body = f"Drop point authority replied: {reply_label}"
-    link = f"/claims/status/{claim_id}"
-    create_notification(
-        db,
-        owner_id,
-        NotificationType.GENERAL,
-        title="Reply from drop point",
-        body=body,
-        link=link,
-        reference_id=claim_id,
-    )
-    db.flush()
-    _fire_push(db, owner_id, "FAiND", body, link)
-
-
-def notify_claim_verified(
-    db: Session,
-    *,
-    claimant_id: uuid.UUID,
-    found_item_id: uuid.UUID,
-    claim_id: uuid.UUID,
-    drop_point,
-) -> None:
-    """Section 8.5 — claimant verified as owner; handover follows in W10."""
-    dp_name = drop_point.name if drop_point else "the drop point"
-    body = (
-        f"You have been verified as the owner. Please visit {dp_name} to complete handover. "
-        "Bring your student ID."
-    )
-    link = f"/items/{found_item_id}"
-    create_notification(
-        db,
-        claimant_id,
-        NotificationType.CLAIM_RECEIVED,
-        title="Claim verified — owner confirmed",
-        body=body,
-        link=link,
-        reference_id=claim_id,
-    )
-    db.flush()
-    _fire_push(db, claimant_id, "FAiND", body, link)
-
-
-def notify_claim_rejected_other_verified(
-    db: Session,
-    *,
-    claimant_id: uuid.UUID,
-    found_item_id: uuid.UUID,
-    claim_id: uuid.UUID,
-) -> None:
-    """Section 8.5 — another claimant was verified for this item."""
-    body = (
-        "Your claim was not approved — another claimant was verified as the owner "
-        "after an in-person review."
-    )
-    link = f"/items/{found_item_id}"
-    create_notification(
-        db,
-        claimant_id,
-        NotificationType.GENERAL,
-        title="Claim not approved",
-        body=body,
-        link=link,
-        reference_id=claim_id,
-    )
-    db.flush()
-    _fire_push(db, claimant_id, "FAiND", body, link)
-
-
-def notify_claim_rejected_manual(
-    db: Session,
-    *,
-    claimant_id: uuid.UUID,
-    found_item_id: uuid.UUID,
-    claim_id: uuid.UUID,
-) -> None:
-    """Section 8.5 — authority manually rejected a claim."""
-    body = (
-        "Your claim was not approved after review at the drop point. "
-        "If you believe this is an error, contact the drop point staff."
-    )
-    link = f"/items/{found_item_id}"
-    create_notification(
-        db,
-        claimant_id,
-        NotificationType.GENERAL,
-        title="Claim rejected",
-        body=body,
-        link=link,
-        reference_id=claim_id,
-    )
-    db.flush()
-    _fire_push(db, claimant_id, "FAiND", body, link)
-
-
-def notify_finder_dropoff_reminder(db: Session, *, item) -> None:
-    """Section 14.1 — 24h drop-off reminder; registered finders only."""
-    if not item.posted_by_id:
-        return
-    body = (
-        "Reminder: please drop off your found item at the selected drop point within 48 hours "
-        "to keep your report active."
-    )
-    link = f"/track/found?ref={item.tracking_reference}" if item.tracking_reference else f"/items/{item.id}"
-    create_notification(
-        db,
-        item.posted_by_id,
-        NotificationType.GENERAL,
-        title="Drop-off reminder",
-        body=body,
-        link=link,
-        reference_id=item.id,
-    )
-    db.flush()
-    _fire_push(db, item.posted_by_id, "FAiND", body, link)
-
-
-def notify_finder_dropoff_complete(db: Session, *, item) -> None:
-    """Section 14.1 — drop-off confirmed; registered finder only."""
-    if not item.posted_by_id:
-        return
-    body = "Your found item drop-off has been confirmed at the drop point."
-    link = f"/items/{item.id}"
-    create_notification(
-        db,
-        item.posted_by_id,
-        NotificationType.GENERAL,
-        title="Drop-off confirmed",
-        body=body,
-        link=link,
-        reference_id=item.id,
-    )
-    db.flush()
-    _fire_push(db, item.posted_by_id, "FAiND", body, link)
-
-
-def notify_pending_claim_owners_item_ready(db: Session, *, item, drop_point) -> None:
-    """Section 14.1 — item at drop point; notify pending claimants."""
-    from app.models.claim import Claim, ClaimStatus
-
-    claims = (
-        db.query(Claim)
-        .filter(Claim.found_item_id == item.id, Claim.status == ClaimStatus.PENDING)
-        .all()
-    )
-    for claim in claims:
-        notify_owner_claim_ready_for_collection(
-            db,
-            owner_id=claim.claimant_user_id,
-            found_item_id=item.id,
-            claim_id=claim.id,
-            drop_point=drop_point,
-        )
-
-
-def notify_owner_found_item_overdue(
-    db: Session,
-    *,
-    owner_id: uuid.UUID,
+    lost_owner_id: uuid.UUID,
+    found_owner_id: uuid.UUID,
+    match_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    lost_item_id: uuid.UUID,
     found_item_id: uuid.UUID,
 ) -> None:
-    """Section 14.1 — 48h overdue for owners with pending claims."""
-    body = (
-        "A found item you claimed is overdue for drop-off. "
-        "We'll notify you when it arrives at the drop point."
-    )
-    link = f"/items/{found_item_id}"
+    """Section 11.1 — verification passed: both parties notified, chat unlocked."""
+    lost_body = "Your ownership verification passed. You can now chat with the finder."
+    found_body = "The lost item owner verified ownership. Chat is now unlocked."
+    lost_link = f"/messages/{conversation_id}"
+    found_link = f"/messages/{conversation_id}"
+
     create_notification(
-        db,
-        owner_id,
-        NotificationType.GENERAL,
-        title="Found item not yet dropped off",
-        body=body,
-        link=link,
-        reference_id=found_item_id,
+        db, lost_owner_id, NotificationType.VERIFICATION_PASSED,
+        title="Verification passed!",
+        body=lost_body, link=lost_link, reference_id=match_id,
+    )
+    create_notification(
+        db, found_owner_id, NotificationType.VERIFICATION_PASSED,
+        title="Chat unlocked!",
+        body=found_body, link=found_link, reference_id=match_id,
     )
     db.flush()
-    _fire_push(db, owner_id, "FAiND", body, link)
+    _fire_push(db, lost_owner_id, "FAiND", lost_body, lost_link)
+    _fire_push(db, found_owner_id, "FAiND", found_body, found_link)
 
 
-def notify_owners_drop_point_temporarily_closed(db: Session, *, drop_point) -> None:
-    """Section 14.1 — drop point temporarily closed."""
-    from app.models.claim import Claim, ClaimStatus
-    from app.models.item import Item
-
-    reason = drop_point.closed_reason or "No reason given"
-    claims = (
-        db.query(Claim)
-        .join(Item, Claim.found_item_id == Item.id)
-        .filter(Item.drop_point_id == drop_point.id, Claim.status == ClaimStatus.PENDING)
-        .all()
-    )
-    for claim in claims:
-        body = (
-            f"{drop_point.name} is temporarily closed ({reason}). "
-            "Your claim remains on file — we'll notify you when collection resumes."
-        )
-        link = f"/items/{claim.found_item_id}"
-        create_notification(
-            db,
-            claim.claimant_user_id,
-            NotificationType.GENERAL,
-            title="Drop point temporarily closed",
-            body=body,
-            link=link,
-            reference_id=claim.id,
-        )
-        db.flush()
-        _fire_push(db, claim.claimant_user_id, "FAiND", body, link)
-
-
-def notify_redemption_expiring_soon(
+def notify_verification_failed(
     db: Session,
-    *,
     user_id: uuid.UUID,
-    code: str,
-    token_amount: int,
+    match_id: uuid.UUID,
+    lost_item_id: uuid.UUID,
+    attempts_remaining: int,
 ) -> None:
-    """Section 14.1 — redemption code expiring soon."""
+    """Section 11.1 — verification failed: claimant only."""
     body = (
-        f"Your redemption code {code} ({token_amount} tokens) expires soon. "
-        "Redeem it at a campus partner before it expires."
+        f"Your verification answers did not match. "
+        f"{attempts_remaining} attempt(s) remaining in the next 24 hours."
     )
+    link = f"/verify-ownership/{match_id}"
+    create_notification(
+        db, user_id, NotificationType.VERIFICATION_FAILED,
+        title="Verification failed",
+        body=body, link=link, reference_id=match_id,
+    )
+    db.flush()
+    _fire_push(db, user_id, "FAiND", body, link)
+
+
+def notify_verification_review(
+    db: Session,
+    user_id: uuid.UUID,
+    match_id: uuid.UUID,
+    lost_item_id: uuid.UUID,
+) -> None:
+    """Section 11.1 — sent to admin review: claimant only."""
+    body = (
+        "Your verification score is in the review range. "
+        "An admin will review your answers — we'll notify you when decided."
+    )
+    link = f"/items/{lost_item_id}"
+    create_notification(
+        db, user_id, NotificationType.VERIFICATION_REVIEW,
+        title="Verification under review",
+        body=body, link=link, reference_id=match_id,
+    )
+    db.flush()
+    _fire_push(db, user_id, "FAiND", body, link)
+
+
+def notify_claim_received(
+    db: Session,
+    lost_owner_id: uuid.UUID,
+    lost_item_id: uuid.UUID,
+    claim_id: uuid.UUID,
+) -> None:
+    """Path B (V4.3): generic claim notice — no finder identity or answers revealed."""
+    body = (
+        "Someone claims to have found your item. We are verifying their claim."
+    )
+    link = f"/items/{lost_item_id}"
+    create_notification(
+        db,
+        lost_owner_id,
+        NotificationType.CLAIM_RECEIVED,
+        title="New claim on your lost item",
+        body=body,
+        link=link,
+        reference_id=claim_id,
+    )
+    db.flush()
+    _fire_push(db, lost_owner_id, "FAiND", body, link)
+
+
+def notify_claim_under_review(
+    db: Session,
+    lost_owner_id: uuid.UUID,
+    lost_item_id: uuid.UUID,
+    claim_id: uuid.UUID,
+) -> None:
+    """Path B claim in admin review range — inform lost owner."""
+    body = "A finder claim on your lost item needs admin review."
+    link = f"/items/{lost_item_id}"
+    create_notification(
+        db,
+        lost_owner_id,
+        NotificationType.VERIFICATION_REVIEW,
+        title="Claim under review",
+        body=body,
+        link=link,
+        reference_id=claim_id,
+    )
+    db.flush()
+    _fire_push(db, lost_owner_id, "FAiND", body, link)
+
+
+def notify_path_b_failed(
+    db: Session,
+    user_id: uuid.UUID,
+    lost_item_id: uuid.UUID,
+    attempts_remaining: int,
+) -> None:
+    """Path B claim rejected — notify finder only."""
+    body = (
+        f"Your I Have This Item claim was not approved. "
+        f"{attempts_remaining} attempt(s) remaining for this item."
+    )
+    link = f"/i-have-this-item/{lost_item_id}"
     create_notification(
         db,
         user_id,
-        NotificationType.GENERAL,
-        title="Redemption code expiring soon",
+        NotificationType.VERIFICATION_FAILED,
+        title="Claim not approved",
         body=body,
-        link="/dashboard",
+        link=link,
+        reference_id=lost_item_id,
     )
     db.flush()
-    _fire_push(db, user_id, "FAiND", body, "/dashboard")
+    _fire_push(db, user_id, "FAiND", body, link)
 
 
-def notify_finder_handover_complete(
+def notify_path_c_claim_received(
     db: Session,
-    *,
     finder_id: uuid.UUID,
-    item_id: uuid.UUID,
-    handover_id: uuid.UUID,
+    found_item_id: uuid.UUID,
+    claim_id: uuid.UUID,
 ) -> None:
-    """Section 14.1 — handover complete; registered finder."""
-    body = "An item you found has been returned to its owner."
-    link = f"/items/{item_id}"
+    """Path C — finder notified when someone claims their found item."""
+    body = (
+        "Someone believes your found item may be theirs. "
+        "We are verifying their claim."
+    )
+    link = f"/items/{found_item_id}"
     create_notification(
         db,
         finder_id,
-        NotificationType.ITEM_RETURNED,
-        title="Item returned",
+        NotificationType.CLAIM_RECEIVED,
+        title="New claim on your found item",
         body=body,
         link=link,
-        reference_id=handover_id,
+        reference_id=claim_id,
     )
     db.flush()
     _fire_push(db, finder_id, "FAiND", body, link)
 
 
-def notify_handover_awaiting_owner(
+def notify_path_c_under_review(
     db: Session,
-    *,
     claimant_id: uuid.UUID,
-    handover_id: uuid.UUID,
-    item_id: uuid.UUID,
+    finder_id: uuid.UUID,
+    found_item_id: uuid.UUID,
+    match_id: uuid.UUID,
 ) -> None:
-    """Section 11 — owner digital sign-off required."""
-    body = (
-        "The drop point has recorded your handover. Please confirm digitally "
-        "that you received the item in the condition shown."
+    """Path C — both parties notified when claim is in admin review."""
+    claimant_body = (
+        "Your This Might Be Mine claim is under admin review. "
+        "We'll notify you when a decision is made."
     )
-    link = f"/handover/{handover_id}"
+    finder_body = (
+        "A claim on your found item is under admin review. "
+        "We'll notify you when a decision is made."
+    )
+    claimant_link = f"/this-might-be-mine/{found_item_id}"
+    finder_link = f"/items/{found_item_id}"
     create_notification(
-        db,
-        claimant_id,
-        NotificationType.GENERAL,
-        title="Confirm item handover",
-        body=body,
-        link=link,
-        reference_id=handover_id,
+        db, claimant_id, NotificationType.VERIFICATION_REVIEW,
+        title="Claim under review", body=claimant_body,
+        link=claimant_link, reference_id=match_id,
+    )
+    create_notification(
+        db, finder_id, NotificationType.VERIFICATION_REVIEW,
+        title="Claim under review", body=finder_body,
+        link=finder_link, reference_id=match_id,
     )
     db.flush()
-    _fire_push(db, claimant_id, "FAiND", body, link)
+    _fire_push(db, claimant_id, "FAiND", claimant_body, claimant_link)
+    _fire_push(db, finder_id, "FAiND", finder_body, finder_link)
 
 
-def notify_handover_completed(
+def notify_path_c_rejected(
     db: Session,
-    *,
     claimant_id: uuid.UUID,
-    item_id: uuid.UUID,
-    handover_id: uuid.UUID,
-    owner_confirmed: bool,
-    authority_override: bool,
+    finder_id: uuid.UUID,
+    found_item_id: uuid.UUID,
+    match_id: uuid.UUID,
+    attempts_remaining: int,
 ) -> None:
-    """Section 11 — handover complete, item returned."""
-    if authority_override:
-        body = "Your item handover has been completed by the drop point authority."
-    else:
-        body = "Thank you for confirming. Your item has been marked as returned."
-    link = f"/handover/{handover_id}"
+    """Path C — both parties notified when claim is rejected."""
+    claimant_body = (
+        f"Your This Might Be Mine claim was not approved. "
+        f"{attempts_remaining} attempt(s) remaining for this item."
+    )
+    finder_body = "A claim on your found item was not approved."
+    claimant_link = f"/this-might-be-mine/{found_item_id}"
+    finder_link = f"/items/{found_item_id}"
     create_notification(
-        db,
-        claimant_id,
-        NotificationType.ITEM_RETURNED,
-        title="Item returned",
-        body=body,
-        link=link,
-        reference_id=handover_id,
+        db, claimant_id, NotificationType.VERIFICATION_FAILED,
+        title="Claim not approved", body=claimant_body,
+        link=claimant_link, reference_id=match_id,
+    )
+    create_notification(
+        db, finder_id, NotificationType.VERIFICATION_FAILED,
+        title="Claim not approved", body=finder_body,
+        link=finder_link, reference_id=match_id,
     )
     db.flush()
-    _fire_push(db, claimant_id, "FAiND", body, link)
+    _fire_push(db, claimant_id, "FAiND", claimant_body, claimant_link)
+    _fire_push(db, finder_id, "FAiND", finder_body, finder_link)
 
 
 def notify_post_expiring(
@@ -601,7 +404,7 @@ def notify_item_returned(
 ) -> None:
     """Section 15.3 — both parties notified when return is confirmed."""
     owner_body = "You confirmed receipt — this item is now marked as returned."
-    finder_body = "The owner confirmed the return."
+    finder_body = "The owner confirmed the return. You earned +5 trust points!"
     owner_link = f"/returns/{return_id}"
     finder_link = f"/returns/{return_id}"
 
@@ -654,18 +457,69 @@ def notify_finder_handed_over(
     _fire_push(db, owner_id, "FAiND", body, link)
 
 
+def notify_appreciation_received(
+    db: Session,
+    *,
+    finder_id: uuid.UUID,
+    return_id: uuid.UUID,
+) -> None:
+    """Section 20.2 — finder notified (no amount disclosed)."""
+    body = "The owner expressed appreciation to you for helping return their item."
+    link = f"/returns/{return_id}"
+    create_notification(
+        db,
+        finder_id,
+        NotificationType.GENERAL,
+        title="Appreciation received",
+        body=body,
+        link=link,
+        reference_id=return_id,
+    )
+    db.flush()
+    _fire_push(db, finder_id, "FAiND", body, link)
+
+
+def notify_appreciation_sent(
+    db: Session,
+    *,
+    owner_id: uuid.UUID,
+    return_id: uuid.UUID,
+) -> None:
+    """Section 20 — owner confirmation after successful payment."""
+    body = "Your appreciation was sent successfully. Thank you for supporting the finder!"
+    link = f"/returns/{return_id}"
+    create_notification(
+        db,
+        owner_id,
+        NotificationType.GENERAL,
+        title="Appreciation sent",
+        body=body,
+        link=link,
+        reference_id=return_id,
+    )
+    db.flush()
+    _fire_push(db, owner_id, "FAiND", body, link)
+
+
 def notify_return_disputed(
     db: Session,
     *,
     record,
     filed_by_id: uuid.UUID,
+    tip_frozen: bool,
 ) -> None:
     """Section 16.4 — both parties notified when a return is disputed."""
     link = f"/returns/{record.id}"
     filer_is_owner = filed_by_id == record.lost_owner_id
     other_id = record.found_owner_id if filer_is_owner else record.lost_owner_id
-    filer_body = "Your dispute was submitted. An admin will review this return."
-    other_body = "The other party disputed this return. An admin will review the case."
+    filer_body = (
+        "Your dispute was submitted. An admin will review this return."
+        + (" Any appreciation payment is frozen pending review." if tip_frozen else "")
+    )
+    other_body = (
+        "The other party disputed this return. An admin will review the case."
+        + (" Any tip on this return is frozen pending review." if tip_frozen else "")
+    )
     create_notification(
         db,
         filed_by_id,
@@ -804,6 +658,51 @@ def notify_account_unsuspended(db: Session, user_id: uuid.UUID) -> None:
     _fire_push(db, user_id, "FAiND", body, "/dashboard")
 
 
+def notify_conversation_paused_suspension(
+    db: Session,
+    recipient_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+) -> None:
+    """Section 4.7 / 11.4 — other party notified when chat is paused."""
+    body = "This conversation has been paused pending a platform review."
+    link = f"/messages/{conversation_id}"
+    create_notification(
+        db,
+        recipient_id,
+        NotificationType.GENERAL,
+        title="Conversation paused",
+        body=body,
+        link=link,
+        reference_id=conversation_id,
+    )
+    db.flush()
+    _fire_push(db, recipient_id, "FAiND", body, link)
+
+
+def notify_fraud_alert(
+    db: Session,
+    *,
+    admin_id: uuid.UUID,
+    user_id: uuid.UUID,
+    title: str,
+    body: str,
+    link: str,
+    reference_id: uuid.UUID,
+) -> None:
+    """Section 18 — admin fraud monitoring alert (in-app + push)."""
+    create_notification(
+        db,
+        admin_id,
+        NotificationType.GENERAL,
+        title=title,
+        body=body,
+        link=link,
+        reference_id=reference_id,
+    )
+    db.flush()
+    _fire_push(db, admin_id, "FAiND", body, link)
+
+
 _NON_DELETABLE_TYPES = frozenset({
     NotificationType.MATCH_FOUND,
     NotificationType.POTENTIAL_MATCH_EXPIRED,
@@ -824,27 +723,35 @@ _DELETABLE_TYPES = frozenset({
 _NON_DELETABLE_GENERAL_SUBSTRINGS = (
     "confirm item receipt",
     "confirm your item receipt",
-    "confirm item handover",
     "return dispute",
     "return disputed",
     "dispute resolved",
+    "new chat message",
+    "new message",
+    "conversation paused",
+    "claim under review",
     "claim not approved",
-    "claim rejected",
-    "drop-off reminder",
-    "drop-off confirmed",
-    "drop point temporarily closed",
-    "redemption code expiring",
+    "chat unlocked",
+    "verification passed",
+    "verification failed",
+    "verification under review",
     "potential match",
     "match found",
     "post expiring",
     "account suspended",
     "community guidelines",
     "report reviewed",
+    "appreciation sent",
 )
 
 _DELETABLE_GENERAL_SUBSTRINGS = (
+    "appreciation received",
     "post extended",
     "post removed",
+    "new lost item",
+    "lost item posted",
+    "lost item nearby",
+    "civic alert",
 )
 
 

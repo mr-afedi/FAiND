@@ -1,12 +1,13 @@
 /**
  * Admin detail panel — renders full context for queue items.
  */
-import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import ImageLightbox, { LightboxImage } from './ImageLightbox'
 import {
   formatScorePct,
   statusColor,
+  riskTierColor,
+  pathBadge,
+  formatFraudSignal,
 } from '../utils/adminFormat'
 
 function RecentActions({ actions }) {
@@ -17,7 +18,7 @@ function RecentActions({ actions }) {
       <div className="space-y-1.5">
         {actions.map((a, i) => (
           <p key={`${a.action}-${i}`} className="text-xs text-slate-500">
-            <span className="text-slate-700 dark:text-slate-300 capitalize">{a.action.replace(/_/g, ' ')}</span>
+            <span className="text-slate-300 capitalize">{a.action.replace(/_/g, ' ')}</span>
             {' by '}
             <span className="text-brand-400">{a.admin_email}</span>
             {' · '}
@@ -60,7 +61,8 @@ function ItemBlock({ item, label }) {
       </p>
       {item.poster && (
         <p className="text-xs text-slate-400 mt-1">
-          @{item.poster.username}
+          @{item.poster.username} · trust {item.poster.trust_score} ({item.poster.trust_tier})
+          · fraud {item.poster.fraud_risk_score} ({item.poster.fraud_risk_tier})
         </p>
       )}
       <Photos urls={item.image_urls} />
@@ -73,7 +75,7 @@ function JsonBlock({ data, title }) {
   return (
     <div className="mt-3">
       <p className="text-xs text-slate-400 uppercase mb-1">{title}</p>
-      <pre className="text-xs bg-slate-900/80 p-2 rounded-lg overflow-x-auto text-slate-700 dark:text-slate-300 max-h-48">
+      <pre className="text-xs bg-slate-900/80 p-2 rounded-lg overflow-x-auto text-slate-300 max-h-48">
         {JSON.stringify(data, null, 2)}
       </pre>
     </div>
@@ -120,7 +122,7 @@ function ItemList({ items, title, showPoster = false, limit = 10 }) {
                   <span className="text-[10px] text-slate-500 uppercase">{item.category}</span>
                   <span className="text-[10px] text-slate-500">· {item.status}</span>
                 </div>
-                <p className="text-sm text-slate-800 dark:text-slate-200 mt-1 line-clamp-2">{item.public_description}</p>
+                <p className="text-sm text-slate-200 mt-1 line-clamp-2">{item.public_description}</p>
                 <p className="text-xs text-slate-500 mt-0.5">
                   {item.location_label} · {new Date(item.date_occurred).toLocaleDateString()}
                 </p>
@@ -167,7 +169,7 @@ function ReportList({ reports, title, showEscalated = false }) {
       <div className="space-y-1.5 max-h-40 overflow-y-auto">
         {list.map((r) => (
           <div key={r.id} className="text-xs text-slate-400 border-l-2 border-slate-700 pl-2 py-0.5">
-            <span className="text-slate-700 dark:text-slate-300">{r.reason}</span>
+            <span className="text-slate-300">{r.reason}</span>
             {' · '}
             <span className="text-slate-500">{r.status}</span>
             {showEscalated && r.auto_escalated && (
@@ -182,39 +184,55 @@ function ReportList({ reports, title, showEscalated = false }) {
   )
 }
 
-function PostMatchesList({ matches }) {
-  const list = matches || []
+function PostClaimsList({ claims }) {
+  const list = claims || []
   if (!list.length) {
     return (
       <div className="mt-3">
-        <p className="text-xs text-slate-400 uppercase mb-1">AI matches</p>
+        <p className="text-xs text-slate-400 uppercase mb-1">All claims</p>
         <p className="text-xs text-slate-500">None</p>
       </div>
     )
   }
   return (
     <div className="mt-3">
-      <p className="text-xs text-slate-400 uppercase mb-2">AI matches ({list.length})</p>
+      <p className="text-xs text-slate-400 uppercase mb-2">All claims ({list.length})</p>
       <div className="space-y-2 max-h-64 overflow-y-auto">
-        {list.map((m) => (
+        {list.map((c) => (
           <div
-            key={m.match_id}
+            key={c.match_id}
             className="rounded-lg border border-slate-700/80 bg-slate-900/40 p-3"
           >
             <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-brand-400 uppercase font-semibold">{c.path}</span>
               <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase ${
-                m.status === 'verified'
+                c.status === 'verified'
                   ? 'bg-emerald-500/20 text-emerald-300'
-                  : m.status === 'pending_review'
+                  : c.status === 'pending_review'
                     ? 'bg-amber-500/20 text-amber-300'
                     : 'bg-slate-700 text-slate-400'
               }`}>
-                {m.status?.replace(/_/g, ' ')}
+                {c.status?.replace(/_/g, ' ')}
               </span>
-              <span className="text-slate-400">score {formatScorePct(m.match_score)}</span>
+              <span className="text-slate-400">score {formatScorePct(c.match_score)}</span>
             </div>
+            {c.claimant ? (
+              <>
+                <p className="text-sm text-slate-200 mt-1.5">
+                  {c.claimant.full_name}
+                  <span className="text-slate-500"> @{c.claimant.username}</span>
+                </p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Trust {c.claimant.trust_score} ({c.claimant.trust_tier})
+                  {' · '}
+                  Fraud {c.claimant.fraud_risk_score} ({c.claimant.fraud_risk_tier})
+                </p>
+              </>
+            ) : (
+              <p className="text-xs text-slate-500 mt-1.5">Claimant unknown</p>
+            )}
             <p className="text-[10px] text-slate-600 mt-1">
-              {new Date(m.created_at).toLocaleString()}
+              {new Date(c.created_at).toLocaleString()}
             </p>
           </div>
         ))}
@@ -243,7 +261,7 @@ function StatusHistoryList({ history }) {
             className="flex gap-3 text-xs border-l-2 border-slate-700 pl-3 py-0.5"
           >
             <div className="min-w-0 flex-1">
-              <p className="text-slate-700 dark:text-slate-300 capitalize">{entry.event?.replace(/_/g, ' ')}</p>
+              <p className="text-slate-300 capitalize">{entry.event?.replace(/_/g, ' ')}</p>
               {entry.detail?.status && (
                 <p className="text-slate-500 mt-0.5">Status: {entry.detail.status}</p>
               )}
@@ -266,6 +284,117 @@ function StatusHistoryList({ history }) {
   )
 }
 
+function ClaimsSummary({ claims }) {
+  if (!claims) return null
+  const pathA = claims.path_a_attempts || []
+  const pathB = claims.path_b || []
+  const pathC = claims.path_c || []
+  const total = pathA.length + pathB.length + pathC.length
+  if (!total) {
+    return (
+      <div className="mt-3">
+        <p className="text-xs text-slate-400 uppercase mb-1">Claims made</p>
+        <p className="text-xs text-slate-500">None</p>
+      </div>
+    )
+  }
+  return (
+    <div className="mt-3">
+      <p className="text-xs text-slate-400 uppercase mb-2">Claims made ({total})</p>
+      <div className="space-y-1 max-h-32 overflow-y-auto text-xs text-slate-400">
+        {pathA.map((c) => (
+          <p key={c.id}>Path A · {c.result} · score {formatScorePct(c.ownership_score)}</p>
+        ))}
+        {pathB.map((c) => (
+          <p key={c.id}>Path B · {c.result} · score {formatScorePct(c.ownership_score)}</p>
+        ))}
+        {pathC.map((c) => (
+          <p key={c.id}>Path C · {c.result} · score {formatScorePct(c.ownership_score)}</p>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export function ClaimDetail({ detail, actions }) {
+  if (!detail) return null
+  return (
+    <div>
+      <p className="text-xs text-brand-400 uppercase">Path {pathBadge(detail.path)}</p>
+      <p className="text-sm text-slate-400 mt-1">{detail.scoring_formula}</p>
+      <p className="text-sm mt-2">
+        Overall score: <span className="font-semibold text-slate-200">{formatScorePct(detail.match_score)}</span>
+      </p>
+      {detail.gradual_improvement_detected && (
+        <p className="text-xs text-amber-400 mt-1">⚠ Gradual improvement pattern detected across attempts</p>
+      )}
+      {detail.claimant && (
+        <p className="text-xs text-slate-500 mt-1">
+          Claimant: {detail.claimant.full_name} (@{detail.claimant.username})
+          {' · '}
+          Trust {detail.claimant.trust_score} ({detail.claimant.trust_tier})
+          {' · '}
+          Fraud {detail.claimant.fraud_risk_score} ({detail.claimant.fraud_risk_tier})
+        </p>
+      )}
+      {detail.attempt_scores?.length > 0 && (
+        <div className="mt-2 text-xs text-slate-500">
+          Attempt scores: {detail.attempt_scores.map((s) => formatScorePct(s)).join(' → ')}
+        </div>
+      )}
+      <ItemBlock item={detail.lost_item} label="Lost item" />
+      <ItemBlock item={detail.found_item} label="Found item" />
+      <JsonBlock data={detail.evidence} title="Evidence & scores" />
+      <RecentActions actions={detail.recent_actions} />
+      {actions}
+    </div>
+  )
+}
+
+function ClaimantsList({ claimants }) {
+  if (!claimants?.length) return null
+  return (
+    <div className="mt-3">
+      <p className="text-xs text-slate-400 uppercase mb-2">Claimants in dispute</p>
+      <div className="space-y-2">
+        {claimants.map((c) => (
+          <div key={c.match_id} className="rounded-lg border border-slate-700/80 bg-slate-900/40 p-3 text-xs">
+            <p className="text-slate-200 font-medium">
+              {c.claimant?.full_name || 'Unknown'} (@{c.claimant?.username || '?'})
+            </p>
+            <p className="text-slate-500 mt-0.5">
+              {c.path} · score {formatScorePct(c.match_score)} · status {c.status}
+            </p>
+            <p className="text-slate-600 mt-0.5">
+              Trust {c.claimant?.trust_score} · Fraud {c.claimant?.fraud_risk_score}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function VerificationHistory({ rows }) {
+  if (!rows?.length) return null
+  return (
+    <div className="mt-3 max-h-48 overflow-y-auto">
+      <p className="text-xs text-slate-400 uppercase mb-2">Verification history</p>
+      <div className="space-y-1.5">
+        {rows.map((v) => (
+          <div key={v.id} className="text-xs text-slate-400 border-l-2 border-slate-700 pl-2">
+            <span className="text-slate-300">{v.path}</span>
+            {' · '}
+            {v.result} · score {formatScorePct(v.ownership_score)}
+            {' · '}
+            <span className="text-slate-600">{new Date(v.created_at).toLocaleString()}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function ReturnStateBlock({ state }) {
   if (!state) return null
   return (
@@ -274,7 +403,7 @@ function ReturnStateBlock({ state }) {
       <p>Returned: {state.returned_at ? new Date(state.returned_at).toLocaleString() : '—'}</p>
       <p>Finder handed over: {state.finder_handed_over_at ? new Date(state.finder_handed_over_at).toLocaleString() : '—'}</p>
       <p>Owner received: {state.owner_received_at ? new Date(state.owner_received_at).toLocaleString() : '—'}</p>
-      <p>Method: {state.method || '—'}</p>
+      <p>Method: {state.method || '—'} · Tip frozen: {state.tip_frozen ? 'yes' : 'no'}</p>
     </div>
   )
 }
@@ -289,6 +418,18 @@ export function DisputeDetail({ detail, actions }) {
       <ItemBlock item={detail.found_item} label="Found item" />
       <ReturnStateBlock state={detail.return_state} />
       {detail.qr_logs && <JsonBlock data={detail.qr_logs} title="QR logs" />}
+      <ClaimantsList claimants={detail.claimants} />
+      {detail.chat_history?.length > 0 && (
+        <div className="mt-3 max-h-40 overflow-y-auto space-y-1">
+          <p className="text-xs text-slate-400 uppercase">Chat history</p>
+          {detail.chat_history.map((m) => (
+            <p key={m.id} className="text-xs text-slate-400">
+              <span className="text-slate-300">{m.sender_name}:</span> {m.body}
+            </p>
+          ))}
+        </div>
+      )}
+      <VerificationHistory rows={detail.verification_history} />
       {detail.reports_on_parties && (
         <JsonBlock data={detail.reports_on_parties} title="Reports involving parties" />
       )}
@@ -307,7 +448,7 @@ export function ReportDetail({ detail, actions }) {
       <p className="text-sm mt-1">{r.reason} — {r.detail_text || 'No details'}</p>
       {r.reporter && (
         <p className="text-xs text-slate-500 mt-1">
-          Reporter: @{r.reporter.username}
+          Reporter: @{r.reporter.username} · trust {r.reporter.trust_score} ({r.reporter.trust_tier})
         </p>
       )}
       {r.auto_escalated && (
@@ -326,46 +467,79 @@ export function ReportDetail({ detail, actions }) {
   )
 }
 
+export function FraudDetail({ detail, actions }) {
+  if (!detail) return null
+  return (
+    <div>
+      <p className="text-sm font-medium">
+        {detail.user?.full_name}{' '}
+        <span className="text-slate-500">@{detail.user?.username}</span>
+      </p>
+      <p className="text-xs text-slate-400 truncate">{detail.user?.email}</p>
+      <p className="text-xs text-slate-400 mt-1">
+        Risk {detail.fraud_risk_score}{' '}
+        <span className={`px-1.5 py-0.5 rounded ${riskTierColor(detail.fraud_risk_tier)}`}>
+          {detail.fraud_risk_tier}
+        </span>
+        {' · '}
+        Trust {detail.trust_score} ({detail.trust_tier})
+      </p>
+      {detail.verification_blocked && (
+        <p className="text-xs text-red-400 mt-2">
+          Verification blocked — score at or above 100. Use &quot;Allow verification&quot; to restore attempts.
+        </p>
+      )}
+      {detail.fraud_verification_override && (
+        <p className="text-xs text-emerald-400 mt-1">
+          Verification override active — user may submit claims despite elevated risk.
+        </p>
+      )}
+      <div className="mt-3 max-h-64 overflow-y-auto space-y-1">
+        <p className="text-xs text-slate-400 uppercase">Fraud event history</p>
+        {(detail.fraud_events || []).map((e) => (
+          <p key={e.id} className="text-xs text-slate-500">
+            {new Date(e.created_at).toLocaleString()}
+            {' — '}
+            {formatFraudSignal(e.signal_type)}
+            {' '}
+            ({e.delta >= 0 ? '+' : ''}{e.delta}) → {e.score_after}
+          </p>
+        ))}
+      </div>
+      <ItemList items={detail.items_posted} title="Items posted" limit={8} />
+      <ClaimsSummary claims={detail.claims} />
+      <ReportList reports={detail.reports_received} title="Reports received" />
+      <RecentActions actions={detail.recent_actions} />
+      {actions}
+    </div>
+  )
+}
+
 export function ReturnedDetail({ detail, actions, onGoToDispute }) {
   if (!detail) return null
   const lost = detail.lost_item
-  const found = detail.found_item
   const d = detail.dispute || {}
-  const handover = detail.handover
-  const claim = detail.claim
   return (
     <div>
-      {lost ? (
-        <ItemBlock item={lost} label="Lost item (returned)" />
-      ) : (
-        <ItemBlock item={found} label="Returned item" />
-      )}
-      {found && lost && (
-        <ItemBlock item={found} label="Found item" />
+      <ItemBlock item={lost} label="Lost item (returned)" />
+      {detail.found_item && (
+        <p className="text-xs text-slate-500 mt-2">
+          Found post: {detail.found_item.public_description?.slice(0, 100)}
+        </p>
       )}
       <div className="admin-detail-block mt-2 text-xs space-y-1">
         <p>
           <span className="text-slate-500">Owner</span>{' '}
-          @{detail.owner?.username}
-          {detail.owner?.full_name ? ` (${detail.owner.full_name})` : ''}
+          @{detail.owner?.username} · trust {detail.owner?.trust_score} ({detail.owner?.trust_tier})
         </p>
         <p>
           <span className="text-slate-500">Finder</span>{' '}
-          {detail.finder?.username ? `@${detail.finder.username}` : (detail.finder?.full_name || 'Anonymous finder')}
+          @{detail.finder?.username} · trust {detail.finder?.trust_score} ({detail.finder?.trust_tier})
         </p>
-        {detail.drop_point_name && (
-          <p><span className="text-slate-500">Drop point</span> {detail.drop_point_name}</p>
-        )}
         <p><span className="text-slate-500">Location lost</span> {detail.location_lost || '—'}</p>
         <p><span className="text-slate-500">Location found</span> {detail.location_found || '—'}</p>
         <p>
           <span className="text-slate-500">Dates</span>{' '}
-          {detail.date_posted && (
-            <>posted {new Date(detail.date_posted).toLocaleDateString()} · </>
-          )}
-          {detail.date_dropped_off && (
-            <>dropped off {new Date(detail.date_dropped_off).toLocaleString()} · </>
-          )}
           lost {detail.date_lost ? new Date(detail.date_lost).toLocaleDateString() : '—'}
           {' · '}
           found {detail.date_found ? new Date(detail.date_found).toLocaleDateString() : '—'}
@@ -373,39 +547,23 @@ export function ReturnedDetail({ detail, actions, onGoToDispute }) {
           returned {detail.date_returned ? new Date(detail.date_returned).toLocaleString() : '—'}
         </p>
         <p><span className="text-slate-500">Confirmed via</span> {detail.return_method || '—'}</p>
-        {claim && (
-          <p>
-            <span className="text-slate-500">Claim path</span> {claim.claim_path}
-            {claim.claim_path === 'A' && claim.ai_confidence_score != null && (
-              <> · AI score {(claim.ai_confidence_score * 100).toFixed(0)}%</>
-            )}
-          </p>
-        )}
+        <p>
+          <span className="text-slate-500">Verification</span> Path {pathBadge(detail.verification_path)}
+          {detail.approval_score != null && (
+            <> · score {formatScorePct(detail.approval_score)}</>
+          )}
+        </p>
+        <p>
+          <span className="text-slate-500">Tip</span>{' '}
+          {detail.tip?.tipped ? (
+            <span className="text-emerald-400 font-medium">
+              GHS {detail.tip.amount_ghs} ({detail.tip.currency})
+            </span>
+          ) : (
+            <span className="text-slate-400">{detail.tip?.message || 'No tip sent'}</span>
+          )}
+        </p>
       </div>
-      {handover && (
-        <div className="admin-detail-block mt-3 text-xs space-y-2">
-          <p className="text-slate-400 uppercase text-[10px] tracking-wide">Handover capture</p>
-          <p><span className="text-slate-500">Claimant</span> {handover.claimant_name}</p>
-          <p><span className="text-slate-500">Phone</span> {handover.claimant_phone}</p>
-          {handover.claimant_student_id && (
-            <p><span className="text-slate-500">Student ID</span> {handover.claimant_student_id}</p>
-          )}
-          {handover.completed_at && (
-            <p><span className="text-slate-500">Handover at</span> {new Date(handover.completed_at).toLocaleString()}</p>
-          )}
-          {handover.authority_override && (
-            <p className="text-amber-400">Authority override — owner did not sign digitally</p>
-          )}
-          <div className="flex flex-wrap gap-2 mt-2">
-            {handover.condition_photo_url && (
-              <img src={handover.condition_photo_url} alt="Condition at handover" className="w-24 h-24 object-cover rounded-lg border border-slate-700" />
-            )}
-            {handover.claimant_photo_url && (
-              <img src={handover.claimant_photo_url} alt="Claimant at handover" className="w-24 h-24 object-cover rounded-lg border border-slate-700" />
-            )}
-          </div>
-        </div>
-      )}
       {d.had_dispute && (
         <div className="mt-3 text-xs">
           <p className="text-slate-400 uppercase mb-1">Dispute history</p>
@@ -432,6 +590,16 @@ export function ReturnedDetail({ detail, actions, onGoToDispute }) {
           )}
         </div>
       )}
+      {detail.chat_history?.length > 0 && (
+        <div className="mt-3 max-h-48 overflow-y-auto">
+          <p className="text-xs text-slate-400 uppercase mb-1">Chat history (read-only)</p>
+          {detail.chat_history.map((m) => (
+            <p key={m.id} className="text-xs text-slate-400">
+              <span className="text-slate-300">{m.sender_name}:</span> {m.body}
+            </p>
+          ))}
+        </div>
+      )}
       {actions}
     </div>
   )
@@ -448,7 +616,7 @@ export function PostDetail({ detail, actions }) {
           {detail.pending_reports} pending report{detail.pending_reports !== 1 ? 's' : ''}
         </p>
       )}
-      <PostMatchesList matches={detail.matches} />
+      <PostClaimsList claims={detail.claims} />
       <ReportList reports={detail.reports} title="All reports" showEscalated />
       <StatusHistoryList history={detail.status_history} />
       <Link
@@ -470,7 +638,28 @@ export function UserDetailPanel({ detail, actions }) {
     <div>
       <p className="font-medium">{p.full_name}</p>
       <p className="text-xs text-slate-400">{p.email} · @{p.username}</p>
+      <p className="text-xs text-slate-500 mt-1">
+        Trust {detail.trust_score} ({detail.trust_tier}) · Fraud {detail.fraud_risk_score} ({detail.fraud_risk_tier})
+      </p>
+      <div className="mt-3 max-h-32 overflow-y-auto">
+        <p className="text-xs text-slate-400 uppercase">Trust history</p>
+        {(detail.trust_events || []).slice(0, 10).map((e) => (
+          <p key={e.id} className="text-xs text-slate-500">
+            {new Date(e.created_at).toLocaleString()} — {e.reason}{' '}
+            ({e.delta >= 0 ? '+' : ''}{e.delta})
+          </p>
+        ))}
+      </div>
+      <div className="mt-3 max-h-32 overflow-y-auto">
+        <p className="text-xs text-slate-400 uppercase">Fraud history</p>
+        {(detail.fraud_events || []).slice(0, 10).map((e) => (
+          <p key={e.id} className="text-xs text-slate-500">
+            {formatFraudSignal(e.signal_type)} ({e.delta >= 0 ? '+' : ''}{e.delta}) → {e.score_after}
+          </p>
+        ))}
+      </div>
       <ItemList items={detail.items_posted} title="Recent posts" limit={10} />
+      <ClaimsSummary claims={detail.claims} />
       <ReportList reports={detail.reports_received} title="Reports received" />
       {(detail.reports_made?.post?.length > 0 || detail.reports_made?.user?.length > 0) && (
         <div className="mt-3">
@@ -482,218 +671,6 @@ export function UserDetailPanel({ detail, actions }) {
       )}
       <RecentActions actions={detail.recent_actions} />
       {actions}
-    </div>
-  )
-}
-
-function ClaimStatusBadge({ status }) {
-  const labels = {
-    pending: 'Pending review',
-    called_to_collect: 'Called to collect',
-    verified: 'Verified',
-    rejected: 'Rejected',
-  }
-  return (
-    <span className={`text-[10px] font-semibold uppercase ${statusColor(status)}`}>
-      {labels[status] || status?.replace(/_/g, ' ')}
-    </span>
-  )
-}
-
-function AdminPhotoGrid({ urls, onOpen, className = '' }) {
-  if (!urls?.length) return <p className="text-xs text-slate-500">No photos</p>
-  return (
-    <div className={`flex flex-wrap gap-2 ${className}`}>
-      {urls.map((url, i) => (
-        <LightboxImage
-          key={url}
-          src={url}
-          images={urls}
-          index={i}
-          onOpen={onOpen}
-          className="w-24 h-24 rounded-lg overflow-hidden border border-slate-700"
-        />
-      ))}
-    </div>
-  )
-}
-
-function ClaimantEvidenceCard({ claimant, onOpen }) {
-  return (
-    <article className="rounded-lg border border-slate-700/80 bg-slate-900/40 p-3 flex flex-col gap-2 min-w-[240px] flex-1">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">@{claimant.username}</p>
-          {claimant.full_name && (
-            <p className="text-xs text-slate-500">{claimant.full_name}</p>
-          )}
-        </div>
-        <ClaimStatusBadge status={claimant.display_status} />
-      </div>
-      <p className="text-xs text-slate-400">
-        Path {claimant.claim_path}
-        {claimant.trust_tier ? ` · Trust: ${claimant.trust_tier}` : ''}
-      </p>
-      <p className="text-sm text-slate-700 dark:text-slate-300 leading-snug">{claimant.description}</p>
-      {claimant.photo_url && (
-        <LightboxImage
-          src={claimant.photo_url}
-          images={[claimant.photo_url]}
-          onOpen={onOpen}
-          className="w-full max-w-[160px] aspect-square rounded-lg overflow-hidden border border-slate-700"
-        />
-      )}
-      <div className="text-xs text-slate-500 space-y-0.5 mt-auto">
-        <p>
-          Lost {claimant.date_lost ? new Date(claimant.date_lost).toLocaleDateString() : '—'}
-          {claimant.time_lost ? ` at ${claimant.time_lost}` : ''}
-        </p>
-        {claimant.claim_path === 'C' && claimant.lost_location && (
-          <p>Location lost: {claimant.lost_location}</p>
-        )}
-        {claimant.claim_path === 'A' && claimant.ai_confidence_score != null && (
-          <p>AI confidence: {formatScorePct(claimant.ai_confidence_score)}</p>
-        )}
-        <p>Submitted {new Date(claimant.created_at).toLocaleString()}</p>
-      </div>
-    </article>
-  )
-}
-
-export function ClaimDetail({ detail }) {
-  const [lightbox, setLightbox] = useState(null)
-  if (!detail) return null
-
-  const item = detail.found_item
-  const finder = detail.finder
-  const openLightbox = (images, index = 0) => setLightbox({ images, index })
-
-  return (
-    <div className="space-y-4">
-      {lightbox && (
-        <ImageLightbox
-          images={lightbox.images}
-          startIdx={lightbox.index}
-          onClose={() => setLightbox(null)}
-        />
-      )}
-
-      <div>
-        <p className="text-xs text-brand-400 uppercase mb-2">Found item</p>
-        <p className="text-sm text-slate-800 dark:text-slate-200 leading-snug">{item?.public_description}</p>
-        <div className="text-xs text-slate-500 mt-2 space-y-0.5">
-          <p>
-            {item?.category?.replace(/_/g, ' ')} · {item?.status?.replace(/_/g, ' ')}
-          </p>
-          <p>Location found: {item?.location_label || '—'}</p>
-          <p>
-            Date found:{' '}
-            {item?.date_found
-              ? new Date(item.date_found).toLocaleDateString()
-              : '—'}
-          </p>
-          <p>Drop point: {item?.drop_point_name || '—'}</p>
-          {item?.authority_received_at && (
-            <p>Received at drop point: {new Date(item.authority_received_at).toLocaleString()}</p>
-          )}
-          <p>
-            Finder:{' '}
-            {finder?.username
-              ? `@${finder.username}${finder.full_name ? ` (${finder.full_name})` : ''}`
-              : (finder?.full_name || 'Anonymous Finder')}
-          </p>
-        </div>
-        <AdminPhotoGrid urls={item?.image_urls} onOpen={openLightbox} className="mt-2" />
-      </div>
-
-      <div>
-        <p className="text-xs text-brand-400 uppercase mb-2">
-          Claimants ({detail.claimants?.length || 0})
-        </p>
-        <div className="flex gap-3 overflow-x-auto pb-1">
-          {(detail.claimants || []).map((c) => (
-            <ClaimantEvidenceCard key={c.claim_id} claimant={c} onOpen={openLightbox} />
-          ))}
-        </div>
-      </div>
-
-      {detail.authorities?.length > 0 && (
-        <div className="text-xs space-y-1">
-          <p className="text-slate-400 uppercase text-[10px] tracking-wide">Authority</p>
-          {detail.authorities.map((a) => (
-            <p key={a.authority_id} className="text-slate-400">
-              {a.email}
-              {a.drop_point_name ? ` · ${a.drop_point_name}` : ''}
-            </p>
-          ))}
-        </div>
-      )}
-
-      {detail.timeline?.length > 0 && (
-        <div>
-          <p className="text-xs text-slate-400 uppercase mb-2">Authority timeline</p>
-          <div className="space-y-2">
-            {detail.timeline.map((entry, i) => (
-              <div key={`${entry.event}-${entry.at}-${i}`} className="text-xs border-l-2 border-slate-700 pl-3">
-                <p className="text-slate-700 dark:text-slate-300">{entry.label}</p>
-                <p className="text-slate-500 mt-0.5">
-                  {entry.at ? new Date(entry.at).toLocaleString() : '—'}
-                  {entry.actor ? ` · ${entry.actor}` : ''}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {detail.is_returned && detail.handover && (
-        <div className="admin-detail-block text-xs space-y-2">
-          <p className="text-slate-400 uppercase text-[10px] tracking-wide">Handover</p>
-          <p><span className="text-slate-500">Claimant</span> {detail.handover.claimant_name}</p>
-          <p><span className="text-slate-500">Phone</span> {detail.handover.claimant_phone}</p>
-          {detail.handover.claimant_student_id && (
-            <p><span className="text-slate-500">Student ID</span> {detail.handover.claimant_student_id}</p>
-          )}
-          {detail.handover.completed_at && (
-            <p>
-              <span className="text-slate-500">Completed</span>{' '}
-              {new Date(detail.handover.completed_at).toLocaleString()}
-            </p>
-          )}
-          {detail.handover.authority_override && (
-            <p className="text-amber-400">
-              Authority override — owner did not sign digitally
-              {detail.handover.authority_override_note
-                ? `: ${detail.handover.authority_override_note}`
-                : ''}
-            </p>
-          )}
-          <div className="flex flex-wrap gap-2 mt-2">
-            {detail.handover.condition_photo_url && (
-              <LightboxImage
-                src={detail.handover.condition_photo_url}
-                images={[detail.handover.condition_photo_url]}
-                onOpen={openLightbox}
-                className="w-24 h-24 rounded-lg overflow-hidden border border-slate-700"
-              />
-            )}
-            {detail.handover.claimant_photo_url && (
-              <LightboxImage
-                src={detail.handover.claimant_photo_url}
-                images={[detail.handover.claimant_photo_url]}
-                onOpen={openLightbox}
-                className="w-24 h-24 rounded-lg overflow-hidden border border-slate-700"
-              />
-            )}
-          </div>
-        </div>
-      )}
-
-      {item?.id && (
-        <Link to={`/items/${item.id}`} className="text-xs text-brand-400 hover:underline inline-block">
-          View on main site →
-        </Link>
-      )}
     </div>
   )
 }

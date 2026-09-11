@@ -7,15 +7,16 @@ export const PUSH_PROMPT_READY_KEY = 'faind:push_prompt_ready'
 export const PUSH_PROMPT_DISMISSED_KEY = 'faind:push_prompt_dismissed'
 export const PUSH_PROMPT_READY_EVENT = 'faind:push-prompt-ready'
 
-/** In-app notification types that should trigger the push opt-in banner (Section 14.3). */
+/** In-app notification types that should trigger the push opt-in banner. */
 export const NOTIFICATION_WORTHY_TYPES = new Set([
   'match_found',
   'potential_match_expired',
+  'verification_passed',
+  'verification_failed',
+  'verification_review',
   'claim_received',
   'item_returned',
   'post_expiring',
-  'account_suspended',
-  'general', // V5 Section 14.1 — drop-off, handover, redemption, inquiry replies, etc.
 ])
 
 export function isPushPromptReady() {

@@ -32,6 +32,3 @@ class University(Base):
     campus_zones: Mapped[list["CampusZone"]] = relationship(
         "CampusZone", back_populates="university"
     )
-    drop_points: Mapped[list["DropPoint"]] = relationship(
-        "DropPoint", back_populates="university"
-    )

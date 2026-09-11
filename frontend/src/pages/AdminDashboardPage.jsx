@@ -3,28 +3,33 @@
  */
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { useAuth } from '../context/AuthContext'
+import { useTheme } from '../context/ThemeContext'
 import AdminNotificationBell from '../components/AdminNotificationBell'
-import ThemeToggleButton from '../components/ThemeToggleButton'
 import AdminConfirmDialog from '../components/AdminConfirmDialog'
 import {
+  formatScorePct,
   statusColor,
+  riskTierColor,
+  pathBadge,
   EMPTY_STATES,
   ITEM_CATEGORIES,
   formatDateShort,
   formatAdminActionLabel,
   formatAdminLogTarget,
   formatAdminLogDetail,
+  formatFraudSignal,
 } from '../utils/adminFormat'
 import AdminDetailPanel, {
+  ClaimDetail,
   DisputeDetail,
   ReportDetail,
+  FraudDetail,
   PostDetail,
   ReturnedDetail,
   UserDetailPanel,
-  ClaimDetail,
 } from '../components/AdminDetailPanel'
 import {
   adminGate,
@@ -32,8 +37,14 @@ import {
   listUsers,
   suspendUser,
   unsuspendUser,
+  listClaims,
+  approveClaim,
+  rejectClaim,
+  requestClaimInfo,
+  getClaimDetail,
   listDisputes,
   resolveDispute,
+  resolveVerificationDispute,
   getDisputeDetail,
   listReports,
   dismissPostReport,
@@ -43,12 +54,20 @@ import {
   suspendUserReport,
   suppressReporter,
   getReportDetail,
+  listFraudAlerts,
+  confirmFraud,
+  clearFraudFlag,
+  allowVerification,
+  getFraudDetail,
   listPostsModeration,
   forceClosePost,
   removePost,
   getPostDetail,
   getUserDetail,
   listAdminLogs,
+  promoteAdmin,
+  demoteAdmin,
+  trustAdjustUser,
   lockDisputeItem,
   escalateDispute,
   adminSearch,
@@ -56,49 +75,26 @@ import {
   getReturnedDetail,
   openReturnDispute,
   listUniversities,
-  listAuthorities,
-  createAuthority,
-  deactivateAuthority,
-  activateAuthority,
-  lookupRedemptionCode,
-  listSupervisors,
-  createSupervisor,
-  updateSupervisor,
-  listAdminDropPoints,
-  createAdminDropPoint,
-  updateAdminDropPoint,
-  listClaimsOverview,
-  getClaimOverviewDetail,
-  reassignAuthority,
-  getTokenSettings,
-  updateTokenSettings,
   isValidAdminSecret,
   rememberAdminSecret,
   isAdminRole,
 } from '../services/adminService'
-import { listDropPoints } from '../services/dropPointService'
-import StaffPushSettingsToggle from '../components/StaffPushSettingsToggle'
-import StaffPushPromptBanner from '../components/StaffPushPromptBanner'
-import AdminPushPromptTrigger from '../components/AdminPushPromptTrigger'
 
 const POLL_MS = 30_000
+const CLAIMS_PAGE_SIZE = 20
 const RETURNED_PAGE_SIZE = 20
 
 const NAV = [
   { id: 'overview', label: 'Overview' },
-  { id: 'drop_points', label: 'Drop Points', rootOnly: true },
-  { id: 'authorities', label: 'Authorities', rootOnly: true },
-  { id: 'supervisors', label: 'Supervisors', rootOnly: true },
-  { id: 'claims', label: 'Claims Overview', rootOnly: true },
-  { id: 'returned', label: 'Returned Items' },
-  { id: 'token_settings', label: 'Token Settings', rootOnly: true },
-  { id: 'redemption', label: 'Redemption Lookup', rootOnly: true },
-  { id: 'logs', label: 'Admin Logs', rootOnly: true },
-  { id: 'settings', label: 'Settings' },
+  { id: 'claims', label: 'Claims Review' },
   { id: 'disputes', label: 'Disputes' },
   { id: 'reports', label: 'Reports' },
+  { id: 'fraud', label: 'Fraud Alerts' },
   { id: 'posts', label: 'Posts' },
+  { id: 'returned', label: 'Returned Items' },
   { id: 'users', label: 'Users' },
+  { id: 'logs', label: 'Admin Logs', rootOnly: true },
+  { id: 'universities', label: 'Universities', rootOnly: true, future: true },
 ]
 
 function QueueLoading({ label }) {
@@ -143,6 +139,7 @@ export default function AdminDashboardPage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { user, loading: authLoading, logout, isAuthenticated } = useAuth()
+  const { dark, toggle: toggleTheme } = useTheme()
   const queryClient = useQueryClient()
 
   const [section, setSection] = useState(searchParams.get('section') || 'overview')
@@ -150,8 +147,17 @@ export default function AdminDashboardPage() {
   const [globalSearch, setGlobalSearch] = useState('')
   const [searchDebounced, setSearchDebounced] = useState('')
   const [confirm, setConfirm] = useState(null)
+  const [trustAdjustDelta, setTrustAdjustDelta] = useState(0)
+  const [trustAdjustReason, setTrustAdjustReason] = useState('')
+  const [claimsPage, setClaimsPage] = useState(0)
+  const [claimsFilters, setClaimsFilters] = useState({
+    path: '',
+    score_min: '',
+    score_max: '',
+    sort: 'created_at_asc',
+  })
   const [reportStatus, setReportStatus] = useState('pending')
-  const [userFilters, setUserFilters] = useState({ role: '', status: '' })
+  const [userFilters, setUserFilters] = useState({ role: '', status: '', trust_tier: '', fraud_tier: '' })
   const [postFilters, setPostFilters] = useState({ status: '', has_reports: '', has_disputes: '' })
   const [returnedPage, setReturnedPage] = useState(0)
   const [returnedFilters, setReturnedFilters] = useState({
@@ -159,6 +165,7 @@ export default function AdminDashboardPage() {
     university_id: '',
     date_from: '',
     date_to: '',
+    tipped: '',
     sort: 'returned_at_desc',
   })
   const [selectedId, setSelectedId] = useState(searchParams.get('id') || null)
@@ -170,32 +177,13 @@ export default function AdminDashboardPage() {
   const [postSearch, setPostSearch] = useState('')
   const [actionNote, setActionNote] = useState('')
   const [disputeOutcome, setDisputeOutcome] = useState('approved')
+  const [winnerMatchId, setWinnerMatchId] = useState('')
   const [logFilters, setLogFilters] = useState({
     action: '',
     admin_id: '',
     date_from: '',
     date_to: '',
   })
-  const [authorityForm, setAuthorityForm] = useState({ email: '', password: '', drop_point_id: '' })
-  const [creatingAuthority, setCreatingAuthority] = useState(false)
-  const [redemptionCode, setRedemptionCode] = useState('')
-  const [redemptionResult, setRedemptionResult] = useState(null)
-  const [redemptionLoading, setRedemptionLoading] = useState(false)
-  const [supervisorForm, setSupervisorForm] = useState({
-    email: '', password: '', university_id: '', drop_point_ids: [],
-  })
-  const [creatingSupervisor, setCreatingSupervisor] = useState(false)
-  const [dropPointForm, setDropPointForm] = useState({
-    university_id: '', name: '', type: 'faculty', latitude: '', longitude: '', operating_hours: 'Mon-Fri 08:00-17:00',
-  })
-  const [editingDropPoint, setEditingDropPoint] = useState(null)
-  const [dropPointEditForm, setDropPointEditForm] = useState({})
-  const [creatingDropPoint, setCreatingDropPoint] = useState(false)
-  const [tokenSettingsForm, setTokenSettingsForm] = useState(null)
-  const [savingTokenSettings, setSavingTokenSettings] = useState(false)
-  const [reassignAuthId, setReassignAuthId] = useState(null)
-  const [reassignDropPointId, setReassignDropPointId] = useState('')
-  const [claimsFilter, setClaimsFilter] = useState('')
 
   if (!isValidAdminSecret(adminSecret)) {
     return (
@@ -214,7 +202,7 @@ export default function AdminDashboardPage() {
 
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
-      navigate('/login', { replace: true })
+      navigate(`/admin/${adminSecret}/login`, { replace: true })
     } else if (!authLoading && user && !isAdminRole(user.role)) {
       navigate('/', { replace: true })
     }
@@ -251,6 +239,8 @@ export default function AdminDashboardPage() {
       search: userSearch || undefined,
       role: userFilters.role || undefined,
       status: userFilters.status || undefined,
+      trust_tier: userFilters.trust_tier || undefined,
+      fraud_tier: userFilters.fraud_tier || undefined,
       limit: 50,
     }),
     enabled: section === 'users' && enabled,
@@ -260,6 +250,20 @@ export default function AdminDashboardPage() {
     queryKey: ['admin-search', searchDebounced],
     queryFn: () => adminSearch(searchDebounced),
     enabled: enabled && searchDebounced.length >= 2,
+  })
+
+  const claimsQuery = useQuery({
+    queryKey: ['admin-claims', claimsPage, claimsFilters],
+    queryFn: () => listClaims({
+      limit: CLAIMS_PAGE_SIZE,
+      offset: claimsPage * CLAIMS_PAGE_SIZE,
+      path: claimsFilters.path || undefined,
+      score_min: claimsFilters.score_min ? Number(claimsFilters.score_min) : undefined,
+      score_max: claimsFilters.score_max ? Number(claimsFilters.score_max) : undefined,
+      sort: claimsFilters.sort,
+    }),
+    enabled: section === 'claims' && enabled,
+    refetchInterval: section === 'claims' ? POLL_MS : false,
   })
 
   const disputesQuery = useQuery({
@@ -274,6 +278,12 @@ export default function AdminDashboardPage() {
     queryFn: () => listReports(reportStatus),
     enabled: section === 'reports' && enabled,
     refetchInterval: section === 'reports' ? POLL_MS : false,
+  })
+
+  const fraudQuery = useQuery({
+    queryKey: ['admin-fraud'],
+    queryFn: listFraudAlerts,
+    enabled: section === 'fraud' && enabled,
   })
 
   const postsQuery = useQuery({
@@ -291,38 +301,9 @@ export default function AdminDashboardPage() {
   const universitiesQuery = useQuery({
     queryKey: ['universities'],
     queryFn: listUniversities,
-    enabled: enabled && ['returned', 'supervisors', 'drop_points'].includes(section),
+    enabled: section === 'returned' && enabled,
     staleTime: 5 * 60_000,
   })
-
-  const dropPointsQuery = useQuery({
-    queryKey: ['admin-drop-points'],
-    queryFn: listAdminDropPoints,
-    enabled: section === 'drop_points' && enabled && user?.role === 'root_admin',
-  })
-
-  const claimsQuery = useQuery({
-    queryKey: ['admin-claims-overview'],
-    queryFn: listClaimsOverview,
-    enabled: section === 'claims' && enabled && user?.role === 'root_admin',
-  })
-
-  const tokenSettingsQuery = useQuery({
-    queryKey: ['admin-token-settings'],
-    queryFn: getTokenSettings,
-    enabled: section === 'token_settings' && enabled && user?.role === 'root_admin',
-  })
-
-  useEffect(() => {
-    if (tokenSettingsQuery.data && section === 'token_settings') {
-      setTokenSettingsForm({
-        found_item_posted: tokenSettingsQuery.data.found_item_posted,
-        drop_off_on_time: tokenSettingsQuery.data.drop_off_on_time,
-        drop_off_late: tokenSettingsQuery.data.drop_off_late,
-        item_claimed: tokenSettingsQuery.data.item_claimed,
-      })
-    }
-  }, [tokenSettingsQuery.data, section])
 
   const returnedQuery = useQuery({
     queryKey: ['admin-returned', returnedPage, returnedFilters],
@@ -333,6 +314,7 @@ export default function AdminDashboardPage() {
       university_id: returnedFilters.university_id || undefined,
       date_from: returnedFilters.date_from || undefined,
       date_to: returnedFilters.date_to || undefined,
+      tipped: returnedFilters.tipped === 'yes' ? true : returnedFilters.tipped === 'no' ? false : undefined,
       sort: returnedFilters.sort,
     }),
     enabled: section === 'returned' && enabled,
@@ -349,52 +331,30 @@ export default function AdminDashboardPage() {
     enabled: section === 'logs' && enabled && user?.role === 'root_admin',
   })
 
-  const authoritiesQuery = useQuery({
-    queryKey: ['admin-authorities'],
-    queryFn: listAuthorities,
-    enabled: section === 'authorities' && enabled && user?.role === 'root_admin',
-  })
-
-  const authDropPointsQuery = useQuery({
-    queryKey: ['admin-auth-drop-points'],
-    queryFn: listAdminDropPoints,
-    enabled: (section === 'authorities' || Boolean(reassignAuthId)) && enabled && user?.role === 'root_admin',
-  })
-
-  const supervisorsQuery = useQuery({
-    queryKey: ['admin-supervisors'],
-    queryFn: listSupervisors,
-    enabled: section === 'supervisors' && enabled && user?.role === 'root_admin',
-  })
-
-  const supervisorDropPointsQuery = useQuery({
-    queryKey: ['admin-supervisor-drop-points', supervisorForm.university_id],
-    queryFn: () => listDropPoints(supervisorForm.university_id),
-    enabled: section === 'supervisors' && enabled && Boolean(supervisorForm.university_id),
-  })
-
   const detailQuery = useQuery({
     queryKey: ['admin-detail', section, selectedId, selectedMeta],
     queryFn: async () => {
       if (!selectedId) return null
       switch (section) {
+        case 'claims':
+          return getClaimDetail(selectedId)
         case 'disputes':
           return getDisputeDetail(selectedId, selectedMeta.dispute_type)
         case 'reports':
           return getReportDetail(selectedId, selectedMeta.report_type)
+        case 'fraud':
+          return getFraudDetail(selectedId)
         case 'posts':
           return getPostDetail(selectedId)
         case 'users':
           return getUserDetail(selectedId)
         case 'returned':
           return getReturnedDetail(selectedId)
-        case 'claims':
-          return getClaimOverviewDetail(selectedId)
         default:
           return null
       }
     },
-    enabled: enabled && !!selectedId && ['disputes', 'reports', 'posts', 'users', 'returned', 'claims'].includes(section),
+    enabled: enabled && !!selectedId && ['claims', 'disputes', 'reports', 'fraud', 'posts', 'users', 'returned'].includes(section),
   })
 
   const refresh = () => {
@@ -407,6 +367,7 @@ export default function AdminDashboardPage() {
 
   const roleLabel = useMemo(() => {
     if (user?.role === 'root_admin') return 'Root Admin'
+    if (user?.role === 'assistant_root_admin') return 'Assistant Admin'
     return user?.role || ''
   }, [user?.role])
 
@@ -421,6 +382,12 @@ export default function AdminDashboardPage() {
     if (meta.report_type) params.report_type = meta.report_type
     setSearchParams(params)
   }, [setSearchParams])
+
+  const approveClaimMut = useMutation({
+    mutationFn: approveClaim,
+    onSuccess: (d) => { toast.success(d.message); refresh(); claimsQuery.refetch() },
+    onError: (e) => toast.error(e.response?.data?.detail || 'Failed'),
+  })
 
   if (authLoading || gateQuery.isLoading) {
     return (
@@ -452,7 +419,106 @@ export default function AdminDashboardPage() {
   const renderDetailActions = () => {
     if (!selectedId) return null
     switch (section) {
+      case 'claims':
+        return actionBtns(
+          <>
+            <button
+              type="button"
+              className="btn-primary admin-btn-sm"
+              onClick={() => openConfirm({
+                title: 'Approve claim?',
+                description: 'This unlocks chat between both parties and notifies them. This action is logged permanently.',
+                confirmLabel: 'Approve',
+                onConfirm: () => approveClaimMut.mutate(selectedId),
+              })}
+            >
+              Approve
+            </button>
+            <button
+              type="button"
+              className="btn-secondary admin-btn-sm"
+              onClick={() => openConfirm({
+                title: 'Reject claim?',
+                description: 'The claimant will be notified and a trust penalty may apply per Section 12.6.',
+                destructive: true,
+                confirmLabel: 'Reject',
+                onConfirm: async () => {
+                  try {
+                    await rejectClaim(selectedId, actionNote || 'Rejected by admin')
+                    toast.success('Rejected'); refresh(); claimsQuery.refetch()
+                  } catch (e) { toast.error(e.response?.data?.detail || 'Failed') }
+                },
+              })}
+            >
+              Reject
+            </button>
+            <button type="button" className="btn-secondary admin-btn-sm" disabled={actionNote.trim().length < 10} onClick={async () => {
+              try {
+                await requestClaimInfo(selectedId, actionNote.trim())
+                toast.success('Request logged'); setActionNote('')
+              } catch (e) { toast.error(e.response?.data?.detail || 'Failed') }
+            }}>Request more info</button>
+          </>,
+        )
       case 'disputes':
+        if (selectedMeta.dispute_type === 'verification' || detail?.dispute_type === 'verification') {
+          const claimants = detail?.claimants || []
+          return actionBtns(
+            <>
+              <select
+                className="admin-select max-w-[11rem]"
+                value={winnerMatchId}
+                onChange={(e) => setWinnerMatchId(e.target.value)}
+              >
+                <option value="">Winning claimant…</option>
+                {claimants.map((c) => (
+                  <option key={c.match_id} value={c.match_id}>
+                    {c.claimant?.full_name || 'Unknown'} — {pathBadge(c.path)}
+                  </option>
+                ))}
+              </select>
+              <textarea className="admin-textarea flex-1 basis-40" rows={2} placeholder="Note (min 10)" value={actionNote} onChange={(e) => setActionNote(e.target.value)} />
+              <button
+                type="button"
+                className="btn-secondary admin-btn-sm"
+                disabled={actionNote.trim().length < 10}
+                onClick={() => openConfirm({
+                  title: 'Lock item?',
+                  description: 'Pauses all pending matches until resolved.',
+                  onConfirm: async () => {
+                    await lockDisputeItem(selectedId, actionNote.trim(), 'verification')
+                    toast.success('Item locked'); refresh()
+                  },
+                })}
+              >
+                Lock item
+              </button>
+              {!isRoot && (
+                <button type="button" className="btn-secondary admin-btn-sm" disabled={actionNote.trim().length < 10} onClick={async () => {
+                  await escalateDispute(selectedId, actionNote.trim(), 'verification')
+                  toast.success('Escalated')
+                }}>Escalate to Root</button>
+              )}
+              <button
+                type="button"
+                className="btn-primary admin-btn-sm"
+                disabled={!winnerMatchId || actionNote.trim().length < 10}
+                onClick={async () => {
+                  try {
+                    await resolveVerificationDispute(selectedId, winnerMatchId, actionNote.trim())
+                    toast.success('Verification dispute resolved')
+                    setActionNote('')
+                    setWinnerMatchId('')
+                    refresh()
+                    disputesQuery.refetch()
+                  } catch (e) { toast.error(e.response?.data?.detail || 'Failed') }
+                }}
+              >
+                Resolve
+              </button>
+            </>,
+          )
+        }
         return actionBtns(
           <>
             <select className="admin-select" value={disputeOutcome} onChange={(e) => setDisputeOutcome(e.target.value)}>
@@ -468,7 +534,7 @@ export default function AdminDashboardPage() {
               disabled={actionNote.trim().length < 10}
               onClick={() => openConfirm({
                 title: 'Lock item?',
-                description: 'Pauses further activity on this item until the dispute is resolved.',
+                description: 'No further claims can be submitted on this item until the dispute is resolved.',
                 confirmLabel: 'Lock item',
                 onConfirm: async () => {
                   try {
@@ -539,7 +605,7 @@ export default function AdminDashboardPage() {
               })}>Warn user</button>
               <button type="button" className="btn-primary admin-btn-sm" onClick={() => openConfirm({
                 title: 'Suspend user?',
-                description: 'Their posts will be hidden from public browse per platform policy.',
+                description: 'Their posts will be hidden and chats frozen per Section 4.7.',
                 destructive: true,
                 confirmLabel: 'Suspend',
                 onConfirm: async () => { await suspendUserReport(selectedId); toast.success('Suspended'); refresh(); reportsQuery.refetch() },
@@ -552,6 +618,41 @@ export default function AdminDashboardPage() {
               }}>Mark reporter bad faith</button>
             </>
           ),
+        )
+      case 'fraud':
+        return actionBtns(
+          <>
+            {isRoot && (
+              <button type="button" className="btn-primary admin-btn-sm" onClick={() => openConfirm({
+                title: 'Confirm fraud?',
+                description: 'Trust −20, fraud risk +50. This is logged as admin_confirmed_fraud.',
+                destructive: true,
+                confirmLabel: 'Confirm fraud',
+                onConfirm: async () => {
+                  try { await confirmFraud(selectedId); toast.success('Fraud confirmed'); refresh(); fraudQuery.refetch() }
+                  catch (e) { toast.error(e.response?.data?.detail || 'Failed') }
+                },
+              })}>Confirm fraud</button>
+            )}
+            <button type="button" className="btn-secondary admin-btn-sm" onClick={async () => {
+              try { await clearFraudFlag(selectedId); toast.success('Flag cleared'); refresh(); fraudQuery.refetch() }
+              catch (e) { toast.error(e.response?.data?.detail || 'Failed') }
+            }}>Clear flag</button>
+            <button type="button" className="btn-secondary admin-btn-sm" onClick={() => openConfirm({
+              title: 'Suspend user?',
+              description: 'Posts hidden and chats frozen per Section 4.7.',
+              destructive: true,
+              confirmLabel: 'Suspend',
+              onConfirm: async () => {
+                try { await suspendUser(selectedId, 'Fraud review suspension'); toast.success('Suspended'); refresh() }
+                catch (e) { toast.error(e.response?.data?.detail || 'Failed') }
+              },
+            })}>Suspend user</button>
+            <button type="button" className="btn-secondary admin-btn-sm" onClick={async () => {
+              try { await allowVerification(selectedId); toast.success('Verification allowed'); refresh() }
+              catch (e) { toast.error(e.response?.data?.detail || 'Failed') }
+            }}>Allow verification</button>
+          </>,
         )
       case 'posts':
         return actionBtns(
@@ -611,10 +712,29 @@ export default function AdminDashboardPage() {
         const u = usersQuery.data?.users?.find((x) => x.id === selectedId) || detail?.profile
         return actionBtns(
           <>
+            <input type="number" className="admin-input-narrow" placeholder="±" value={trustAdjustDelta} onChange={(e) => setTrustAdjustDelta(Number(e.target.value))} />
+            <input className="admin-input-grow" placeholder="Trust reason (min 10)" value={trustAdjustReason} onChange={(e) => setTrustAdjustReason(e.target.value)} />
+            <button
+              type="button"
+              className="btn-secondary admin-btn-sm"
+              disabled={!trustAdjustDelta || trustAdjustReason.trim().length < 10}
+              onClick={() => openConfirm({
+                title: `Adjust trust by ${trustAdjustDelta > 0 ? '+' : ''}${trustAdjustDelta}?`,
+                description: trustAdjustReason,
+                onConfirm: async () => {
+                  try {
+                    await trustAdjustUser(selectedId, trustAdjustDelta, trustAdjustReason.trim())
+                    toast.success('Trust adjusted'); setTrustAdjustReason(''); refresh(); usersQuery.refetch()
+                  } catch (e) { toast.error(e.response?.data?.detail || 'Failed') }
+                },
+              })}
+            >
+              Adjust trust
+            </button>
             {u?.status === 'active' && u?.role === 'user' && (
               <button type="button" className="btn-secondary admin-btn-sm" onClick={() => openConfirm({
                 title: 'Suspend user?',
-                description: 'Posts will be hidden per Section 4.7.',
+                description: 'Posts hidden and chats frozen per Section 4.7.',
                 destructive: true,
                 confirmLabel: 'Suspend',
                 onConfirm: async () => {
@@ -625,11 +745,33 @@ export default function AdminDashboardPage() {
             {u?.status === 'suspended' && (
               <button type="button" className="btn-secondary admin-btn-sm" onClick={() => openConfirm({
                 title: 'Unsuspend user?',
-                description: 'Restores posts and account access.',
+                description: 'Restores posts, chats, and account access.',
                 onConfirm: async () => {
                   await unsuspendUser(selectedId); toast.success('Unsuspended'); refresh(); usersQuery.refetch()
                 },
               })}>Unsuspend</button>
+            )}
+            {isRoot && u?.role === 'user' && (
+              <button type="button" className="btn-primary admin-btn-sm" onClick={() => openConfirm({
+                title: 'Promote to Assistant Admin?',
+                description: 'Max 2 assistant admins enforced. They cannot access Admin Logs or confirm fraud.',
+                onConfirm: async () => {
+                  try { await promoteAdmin(selectedId); toast.success('Promoted'); usersQuery.refetch() }
+                  catch (e) { toast.error(e.response?.data?.detail || 'Failed') }
+                },
+              })}>Promote</button>
+            )}
+            {isRoot && u?.role === 'assistant_root_admin' && (
+              <button type="button" className="btn-secondary admin-btn-sm" onClick={() => openConfirm({
+                title: 'Demote assistant admin?',
+                description: 'User returns to regular role immediately.',
+                destructive: true,
+                confirmLabel: 'Demote',
+                onConfirm: async () => {
+                  try { await demoteAdmin(selectedId); toast.success('Demoted'); usersQuery.refetch() }
+                  catch (e) { toast.error(e.response?.data?.detail || 'Failed') }
+                },
+              })}>Demote</button>
             )}
           </>,
         )
@@ -641,11 +783,26 @@ export default function AdminDashboardPage() {
 
   const renderListItems = () => {
     switch (section) {
+      case 'claims':
+        return (claimsQuery.data?.claims || []).map((c) => (
+          <button key={c.match_id} type="button" onClick={() => navigateToItem('claims', c.match_id)} className={queueItemClass(selectedId === c.match_id)}>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-brand-500/20 text-brand-300">{pathBadge(c.path)}</span>
+              <span className={`text-[10px] ${statusColor(c.status)}`}>{c.status.replace(/_/g, ' ')}</span>
+            </div>
+            <p className="text-sm mt-1 truncate">{c.item_label || c.lost_description}</p>
+            <p className="text-xs text-slate-400">{c.claimant_name}</p>
+            <p className="text-xs text-slate-500">
+              {formatScorePct(c.match_score)} · {c.claimant_trust_tier || '—'} · {new Date(c.created_at).toLocaleDateString()}
+            </p>
+          </button>
+        ))
       case 'disputes':
         return (disputesQuery.data?.disputes || []).map((d) => (
           <button key={`${d.dispute_type}-${d.dispute_id}`} type="button" onClick={() => navigateToItem('disputes', d.dispute_id, { dispute_type: d.dispute_type })} className={queueItemClass(selectedId === d.dispute_id)}>
             <p className="text-xs text-brand-400 uppercase">{d.dispute_type}</p>
             <p className="text-sm">{d.item_label}</p>
+            {d.tip_frozen && <p className="text-xs text-amber-400">Tip frozen</p>}
           </button>
         ))
       case 'reports':
@@ -656,6 +813,27 @@ export default function AdminDashboardPage() {
             <p className="text-xs text-brand-400">{r.report_type} · {r.reason}</p>
             {r.auto_escalated && <span className="text-xs text-amber-400">Escalated</span>}
             <p className="text-sm truncate">{r.target_item_description || r.target_user_display_name}</p>
+          </button>
+        ))
+      case 'fraud':
+        return (fraudQuery.data?.alerts || []).map((u) => (
+          <button key={u.user_id} type="button" onClick={() => navigateToItem('fraud', u.user_id)} className={queueItemClass(selectedId === u.user_id)}>
+            <p className="text-sm truncate">
+              {u.full_name || u.email}
+              {u.username && <span className="text-slate-500"> @{u.username}</span>}
+            </p>
+            <p className="text-xs mt-0.5">
+              Risk {u.fraud_risk_score}{' '}
+              <span className={`px-1.5 py-0.5 rounded ${riskTierColor(u.risk_tier)}`}>{u.risk_tier}</span>
+              {' · '}Trust {u.trust_score}
+              {u.verification_blocked && <span className="text-red-400"> · Blocked</span>}
+              {u.fraud_verification_override && <span className="text-emerald-400"> · Override</span>}
+            </p>
+            {u.last_signal && (
+              <p className="text-[10px] text-slate-500 mt-0.5 truncate">
+                Last signal: {formatFraudSignal(u.last_signal)}
+              </p>
+            )}
           </button>
         ))
       case 'posts':
@@ -678,6 +856,8 @@ export default function AdminDashboardPage() {
             <p className="text-sm">{u.full_name} <span className="text-slate-500">@{u.username}</span></p>
             <p className="text-xs text-slate-400 truncate">{u.email}</p>
             <p className="text-xs text-slate-500 mt-0.5">
+              Trust {u.trust_score} · Risk {u.fraud_risk_score}
+              {' · '}
               <span className={statusColor(u.status)}>{u.status}</span>
               {' · '}{u.role.replace(/_/g, ' ')}
             </p>
@@ -694,56 +874,15 @@ export default function AdminDashboardPage() {
             <p className="text-sm truncate font-medium">{r.item_description}</p>
             <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 mt-1 text-[11px] text-slate-500">
               <span><span className="text-slate-400">Category</span> {r.category.replace(/_/g, ' ')}</span>
+              <span><span className="text-slate-400">Tipped</span> {r.tipped ? 'Yes' : 'No'}</span>
               <span className="truncate"><span className="text-slate-400">Owner</span> @{r.owner_username}</span>
-              <span className="truncate">
-                <span className="text-slate-400">Finder</span>{' '}
-                {r.finder_username ? `@${r.finder_username}` : (r.finder_name || 'Anonymous')}
-              </span>
+              <span className="truncate"><span className="text-slate-400">Finder</span> @{r.finder_username}</span>
               <span><span className="text-slate-400">Lost</span> {formatDateShort(r.date_lost)}</span>
               <span><span className="text-slate-400">Found</span> {formatDateShort(r.date_found)}</span>
               <span className="col-span-2"><span className="text-slate-400">Returned</span> {formatDateShort(r.date_returned)}</span>
-              {r.drop_point_name && (
-                <span className="col-span-2"><span className="text-slate-400">Drop point</span> {r.drop_point_name}</span>
-              )}
-              {r.handover_completed && (
-                <span className="col-span-2 text-emerald-500/90">
-                  Handover complete{r.handover_authority_override ? ' (authority override)' : r.handover_owner_confirmed ? ' (owner confirmed)' : ''}
-                </span>
-              )}
             </div>
           </button>
         ))
-      case 'claims': {
-        const q = claimsFilter.trim().toLowerCase()
-        return (claimsQuery.data?.items || [])
-          .filter((item) => {
-            if (!q) return true
-            return item.drop_point_name.toLowerCase().includes(q)
-              || item.found_item_description.toLowerCase().includes(q)
-          })
-          .map((item) => (
-            <button
-              key={item.found_item_id}
-              type="button"
-              onClick={() => navigateToItem('claims', item.found_item_id)}
-              className={queueItemClass(selectedId === item.found_item_id)}
-            >
-              <div className="flex flex-wrap justify-between gap-2">
-                <p className="text-sm font-medium truncate">{item.found_item_description}</p>
-                <span className="text-xs text-brand-400 shrink-0">{item.drop_point_name}</span>
-              </div>
-              <p className="text-xs text-slate-500 mt-1">
-                {item.found_item_category.replace(/_/g, ' ')} · {item.found_item_status.replace(/_/g, ' ')}
-              </p>
-              <p className="text-xs text-slate-400 mt-0.5">
-                {item.claim_count} claim{item.claim_count !== 1 ? 's' : ''}
-                {' · '}{item.pending_count} pending
-                {' · '}{item.verified_count} verified
-                {' · '}{item.rejected_count} rejected
-              </p>
-            </button>
-          ))
-      }
       default:
         return []
     }
@@ -764,10 +903,14 @@ export default function AdminDashboardPage() {
     }
     const actions = renderDetailActions()
     switch (section) {
+      case 'claims':
+        return <ClaimDetail detail={detail} actions={<>{actions}<textarea className="admin-textarea w-full mt-2" rows={2} placeholder="Note for reject / request info (min 10 chars)" value={actionNote} onChange={(e) => setActionNote(e.target.value)} /></>} />
       case 'disputes':
         return <DisputeDetail detail={detail} actions={actions} />
       case 'reports':
         return <ReportDetail detail={detail} actions={actions} />
+      case 'fraud':
+        return <FraudDetail detail={detail} actions={actions} />
       case 'posts':
         return <PostDetail detail={detail} actions={actions} />
       case 'users':
@@ -793,24 +936,23 @@ export default function AdminDashboardPage() {
             onGoToDispute={(id, disputeType) => goSection('disputes', id, { dispute_type: disputeType })}
           />
         )
-      case 'claims':
-        return <ClaimDetail detail={detail} />
       default:
         return null
     }
   }
 
-  const hasSplit = ['disputes', 'reports', 'posts', 'returned', 'users', 'claims'].includes(section)
+  const hasSplit = ['claims', 'disputes', 'reports', 'fraud', 'posts', 'returned', 'users'].includes(section)
 
   const navItems = NAV.filter((n) => !n.rootOnly || isRoot)
 
   const queueQuery = {
+    claims: claimsQuery,
     disputes: disputesQuery,
     reports: reportsQuery,
+    fraud: fraudQuery,
     posts: postsQuery,
     returned: returnedQuery,
     users: usersQuery,
-    claims: claimsQuery,
   }[section]
 
   return (
@@ -824,12 +966,16 @@ export default function AdminDashboardPage() {
           <button
             key={item.id}
             type="button"
-            onClick={() => goSection(item.id)}
+            disabled={item.future}
+            onClick={() => {
+              if (item.future) return
+              goSection(item.id)
+            }}
             className={`text-left px-3 py-2 rounded-lg text-sm transition-colors ${
               section === item.id ? 'bg-brand-600/20 text-brand-600 dark:text-brand-300' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-            }`}
+            } ${item.future ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
-            {item.label}
+            {item.label}{item.future ? ' (soon)' : ''}
           </button>
         ))}
         <div className="mt-auto pt-4 border-t border-slate-200 dark:border-slate-800">
@@ -860,7 +1006,12 @@ export default function AdminDashboardPage() {
                     <span className="text-slate-700 dark:text-slate-200">Item</span> · {i.public_description}
                   </button>
                 ))}
-                {!searchQuery.data.users?.length && !searchQuery.data.items?.length && (
+                {searchQuery.data.claims?.map((c) => (
+                  <button key={c.match_id} type="button" className="w-full text-left px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-800" onClick={() => { setGlobalSearch(''); goSection('claims', c.match_id) }}>
+                    <span className="text-slate-700 dark:text-slate-200">Claim</span> · {c.claimant_name} {formatScorePct(c.match_score)}
+                  </button>
+                ))}
+                {!searchQuery.data.users?.length && !searchQuery.data.items?.length && !searchQuery.data.claims?.length && (
                   <p className="px-3 py-3 text-slate-500">No results</p>
                 )}
               </div>
@@ -869,607 +1020,18 @@ export default function AdminDashboardPage() {
           <span className="hidden md:inline text-[10px] px-2 py-0.5 rounded-md bg-brand-500/10 text-brand-600 dark:text-brand-300 font-medium whitespace-nowrap">
             {roleLabel}
           </span>
-          <ThemeToggleButton className="shrink-0" />
-          <AdminNotificationBell onNavigate={navigateToItem} enabled={enabled} />
+          <button type="button" className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0" onClick={toggleTheme} aria-label="Toggle theme">
+            {dark ? '☀️' : '🌙'}
+          </button>
+          <AdminNotificationBell onNavigate={navigateToItem} />
           <button type="button" className="text-xs text-red-500 hover:text-red-400 px-1.5 shrink-0" onClick={() => logout()}>Logout</button>
         </header>
 
         <main className="flex-1 p-4 lg:p-6 overflow-hidden flex flex-col">
-          {section === 'drop_points' && isRoot && (
-            <div className="overflow-y-auto space-y-6 max-w-4xl">
-              <div className="glass p-5 space-y-4">
-                <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Create drop point</h2>
-                <form
-                  className="grid gap-3 sm:grid-cols-2"
-                  onSubmit={async (e) => {
-                    e.preventDefault()
-                    if (!dropPointForm.university_id || !dropPointForm.name || !dropPointForm.latitude || !dropPointForm.longitude) {
-                      return toast.error('University, name, and coordinates are required')
-                    }
-                    setCreatingDropPoint(true)
-                    try {
-                      await createAdminDropPoint({
-                        university_id: dropPointForm.university_id,
-                        name: dropPointForm.name.trim(),
-                        type: dropPointForm.type,
-                        latitude: Number(dropPointForm.latitude),
-                        longitude: Number(dropPointForm.longitude),
-                        operating_hours: dropPointForm.operating_hours,
-                      })
-                      toast.success('Drop point created')
-                      setDropPointForm({
-                        university_id: '', name: '', type: 'faculty', latitude: '', longitude: '',
-                        operating_hours: 'Mon-Fri 08:00-17:00',
-                      })
-                      dropPointsQuery.refetch()
-                    } catch (err) {
-                      toast.error(err.response?.data?.detail || 'Could not create drop point')
-                    } finally {
-                      setCreatingDropPoint(false)
-                    }
-                  }}
-                >
-                  <select
-                    className="admin-select sm:col-span-2"
-                    value={dropPointForm.university_id}
-                    onChange={(e) => setDropPointForm((f) => ({ ...f, university_id: e.target.value }))}
-                  >
-                    <option value="">Select university</option>
-                    {(universitiesQuery.data || []).map((u) => (
-                      <option key={u.id} value={u.id}>{u.short_name}</option>
-                    ))}
-                  </select>
-                  <input className="admin-input-wide sm:col-span-2" placeholder="Name" value={dropPointForm.name} onChange={(e) => setDropPointForm((f) => ({ ...f, name: e.target.value }))} />
-                  <select className="admin-select" value={dropPointForm.type} onChange={(e) => setDropPointForm((f) => ({ ...f, type: e.target.value }))}>
-                    <option value="faculty">Faculty</option>
-                    <option value="security">Security</option>
-                  </select>
-                  <input className="admin-input-wide" placeholder="Operating hours" value={dropPointForm.operating_hours} onChange={(e) => setDropPointForm((f) => ({ ...f, operating_hours: e.target.value }))} />
-                  <input className="admin-input-wide" type="number" step="any" placeholder="Latitude" value={dropPointForm.latitude} onChange={(e) => setDropPointForm((f) => ({ ...f, latitude: e.target.value }))} />
-                  <input className="admin-input-wide" type="number" step="any" placeholder="Longitude" value={dropPointForm.longitude} onChange={(e) => setDropPointForm((f) => ({ ...f, longitude: e.target.value }))} />
-                  <button type="submit" className="btn-primary sm:col-span-2 admin-btn-sm" disabled={creatingDropPoint}>
-                    {creatingDropPoint ? 'Creating…' : 'Create drop point'}
-                  </button>
-                </form>
-              </div>
-
-              <div className="glass p-5 space-y-3">
-                <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-                  All drop points ({dropPointsQuery.data?.drop_points?.length ?? '…'})
-                </h2>
-                {dropPointsQuery.isLoading && <QueueLoading label="drop points" />}
-                {(dropPointsQuery.data?.drop_points || []).map((dp) => (
-                  <div key={dp.id} className="border border-slate-700/50 rounded-lg p-3 text-sm space-y-2">
-                    {editingDropPoint === dp.id ? (
-                      <form
-                        className="grid gap-2 sm:grid-cols-2"
-                        onSubmit={async (e) => {
-                          e.preventDefault()
-                          try {
-                            await updateAdminDropPoint(dp.id, {
-                              name: dropPointEditForm.name,
-                              type: dropPointEditForm.type,
-                              latitude: Number(dropPointEditForm.latitude),
-                              longitude: Number(dropPointEditForm.longitude),
-                              operating_hours: dropPointEditForm.operating_hours,
-                              is_temporarily_closed: dropPointEditForm.is_temporarily_closed,
-                              closed_reason: dropPointEditForm.closed_reason || null,
-                            })
-                            toast.success('Drop point updated')
-                            setEditingDropPoint(null)
-                            dropPointsQuery.refetch()
-                          } catch (err) {
-                            toast.error(err.response?.data?.detail || 'Update failed')
-                          }
-                        }}
-                      >
-                        <input className="admin-input-wide sm:col-span-2" value={dropPointEditForm.name || ''} onChange={(e) => setDropPointEditForm((f) => ({ ...f, name: e.target.value }))} />
-                        <select className="admin-select" value={dropPointEditForm.type || 'faculty'} onChange={(e) => setDropPointEditForm((f) => ({ ...f, type: e.target.value }))}>
-                          <option value="faculty">Faculty</option>
-                          <option value="security">Security</option>
-                        </select>
-                        <input className="admin-input-wide" value={dropPointEditForm.operating_hours || ''} onChange={(e) => setDropPointEditForm((f) => ({ ...f, operating_hours: e.target.value }))} />
-                        <input className="admin-input-wide" type="number" step="any" value={dropPointEditForm.latitude ?? ''} onChange={(e) => setDropPointEditForm((f) => ({ ...f, latitude: e.target.value }))} />
-                        <input className="admin-input-wide" type="number" step="any" value={dropPointEditForm.longitude ?? ''} onChange={(e) => setDropPointEditForm((f) => ({ ...f, longitude: e.target.value }))} />
-                        <label className="flex items-center gap-2 text-xs sm:col-span-2">
-                          <input type="checkbox" checked={Boolean(dropPointEditForm.is_temporarily_closed)} onChange={(e) => setDropPointEditForm((f) => ({ ...f, is_temporarily_closed: e.target.checked }))} />
-                          Temporarily closed
-                        </label>
-                        {dropPointEditForm.is_temporarily_closed && (
-                          <input className="admin-input-wide sm:col-span-2" placeholder="Closed reason" value={dropPointEditForm.closed_reason || ''} onChange={(e) => setDropPointEditForm((f) => ({ ...f, closed_reason: e.target.value }))} />
-                        )}
-                        <div className="flex gap-2 sm:col-span-2">
-                          <button type="submit" className="btn-primary admin-btn-sm">Save</button>
-                          <button type="button" className="btn-secondary admin-btn-sm" onClick={() => setEditingDropPoint(null)}>Cancel</button>
-                        </div>
-                      </form>
-                    ) : (
-                      <>
-                        <div className="flex flex-wrap justify-between gap-2">
-                          <div>
-                            <p className="font-medium text-slate-800 dark:text-slate-200">{dp.name}</p>
-                            <p className="text-xs text-slate-500">{dp.university_name} · {dp.type}</p>
-                            <p className="text-xs text-slate-500">{dp.operating_hours}</p>
-                            {dp.is_temporarily_closed && (
-                              <p className="text-xs text-amber-400 mt-1">Closed: {dp.closed_reason || 'No reason given'}</p>
-                            )}
-                          </div>
-                          <button
-                            type="button"
-                            className="btn-secondary admin-btn-sm text-xs"
-                            onClick={() => {
-                              setEditingDropPoint(dp.id)
-                              setDropPointEditForm({
-                                name: dp.name,
-                                type: dp.type,
-                                latitude: dp.latitude,
-                                longitude: dp.longitude,
-                                operating_hours: dp.operating_hours,
-                                is_temporarily_closed: dp.is_temporarily_closed,
-                                closed_reason: dp.closed_reason || '',
-                              })
-                            }}
-                          >
-                            Edit
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                ))}
-                {!dropPointsQuery.isLoading && !(dropPointsQuery.data?.drop_points || []).length && (
-                  <EmptyQueue section="drop_points" />
-                )}
-              </div>
-            </div>
-          )}
-
-          {section === 'token_settings' && isRoot && (
-            <div className="overflow-y-auto max-w-md">
-              <div className="glass p-5 space-y-4">
-                <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Token reward values</h2>
-                <p className="text-xs text-slate-500">Changes apply to future awards only (Section 12.1).</p>
-                {tokenSettingsQuery.isLoading && <QueueLoading label="token settings" />}
-                {tokenSettingsForm && (
-                  <form
-                    className="space-y-3"
-                    onSubmit={async (e) => {
-                      e.preventDefault()
-                      setSavingTokenSettings(true)
-                      try {
-                        await updateTokenSettings({
-                          found_item_posted: Number(tokenSettingsForm.found_item_posted),
-                          drop_off_on_time: Number(tokenSettingsForm.drop_off_on_time),
-                          drop_off_late: Number(tokenSettingsForm.drop_off_late),
-                          item_claimed: Number(tokenSettingsForm.item_claimed),
-                        })
-                        toast.success('Token settings saved')
-                        tokenSettingsQuery.refetch()
-                      } catch (err) {
-                        toast.error(err.response?.data?.detail || 'Save failed')
-                      } finally {
-                        setSavingTokenSettings(false)
-                      }
-                    }}
-                  >
-                    {[
-                      ['found_item_posted', 'Found item posted'],
-                      ['drop_off_on_time', 'Drop-off on time'],
-                      ['drop_off_late', 'Drop-off late'],
-                      ['item_claimed', 'Item claimed'],
-                    ].map(([key, label]) => (
-                      <label key={key} className="block text-sm">
-                        <span className="text-slate-500 text-xs">{label}</span>
-                        <input
-                          type="number"
-                          min="0"
-                          className="admin-input-wide mt-1"
-                          value={tokenSettingsForm[key]}
-                          onChange={(e) => setTokenSettingsForm((f) => ({ ...f, [key]: e.target.value }))}
-                        />
-                      </label>
-                    ))}
-                    <button type="submit" className="btn-primary admin-btn-sm" disabled={savingTokenSettings}>
-                      {savingTokenSettings ? 'Saving…' : 'Save settings'}
-                    </button>
-                  </form>
-                )}
-              </div>
-            </div>
-          )}
-
-          {section === 'redemption' && (
-            <div className="overflow-y-auto max-w-xl">
-              <div className="glass p-5 space-y-4">
-                <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-                  Redemption Lookup
-                </h2>
-                <p className="text-xs text-slate-500">
-                  Enter a user&apos;s redemption code to verify its value and mark it as redeemed.
-                  Each code is single-use.
-                </p>
-                <form
-                  className="flex flex-col sm:flex-row gap-2"
-                  onSubmit={async (e) => {
-                    e.preventDefault()
-                    const code = redemptionCode.trim()
-                    if (!code) return toast.error('Enter a redemption code')
-                    setRedemptionLoading(true)
-                    try {
-                      const data = await lookupRedemptionCode(code)
-                      setRedemptionResult(data)
-                      if (data.status === 'redeemed' && data.message.includes('successfully')) {
-                        toast.success('Code redeemed')
-                      } else if (data.status === 'redeemed') {
-                        toast.error(data.message)
-                      } else if (data.status === 'expired') {
-                        toast.error(data.message)
-                      }
-                    } catch (err) {
-                      setRedemptionResult(null)
-                      toast.error(err.response?.data?.detail || 'Lookup failed')
-                    } finally {
-                      setRedemptionLoading(false)
-                    }
-                  }}
-                >
-                  <input
-                    type="text"
-                    className="admin-input-wide flex-1 font-mono uppercase"
-                    placeholder="FAIND-XXXXXX"
-                    value={redemptionCode}
-                    onChange={(e) => setRedemptionCode(e.target.value.toUpperCase())}
-                  />
-                  <button
-                    type="submit"
-                    className="btn-primary admin-btn-sm shrink-0"
-                    disabled={redemptionLoading}
-                  >
-                    {redemptionLoading ? 'Looking up…' : 'Look up & Redeem'}
-                  </button>
-                </form>
-
-                {redemptionResult && (
-                  <div className="rounded-lg border border-slate-200/60 dark:border-slate-700/50 p-4 space-y-2 text-sm">
-                    <div className="flex justify-between gap-2">
-                      <span className="text-slate-500">Code</span>
-                      <span className="font-mono font-semibold text-slate-800 dark:text-slate-100">
-                        {redemptionResult.code}
-                      </span>
-                    </div>
-                    <div className="flex justify-between gap-2">
-                      <span className="text-slate-500">Value</span>
-                      <span className="font-semibold tabular-nums">
-                        {redemptionResult.token_amount} tokens
-                      </span>
-                    </div>
-                    <div className="flex justify-between gap-2">
-                      <span className="text-slate-500">Status</span>
-                      <span className={`font-medium capitalize ${
-                        redemptionResult.status === 'redeemed'
-                          ? 'text-green-500'
-                          : redemptionResult.status === 'expired'
-                            ? 'text-amber-500'
-                            : 'text-slate-700 dark:text-slate-300'
-                      }`}>
-                        {redemptionResult.status}
-                      </span>
-                    </div>
-                    <div className="flex justify-between gap-2">
-                      <span className="text-slate-500">Owner</span>
-                      <span className="text-slate-800 dark:text-slate-200 text-right">
-                        {redemptionResult.owner.full_name}
-                        <span className="text-slate-500"> @{redemptionResult.owner.username}</span>
-                      </span>
-                    </div>
-                    <div className="flex justify-between gap-2">
-                      <span className="text-slate-500">Expires</span>
-                      <span>{formatDateShort(redemptionResult.expires_at)}</span>
-                    </div>
-                    {redemptionResult.redeemed_at && (
-                      <div className="flex justify-between gap-2">
-                        <span className="text-slate-500">Redeemed</span>
-                        <span>{formatDateShort(redemptionResult.redeemed_at)}</span>
-                      </div>
-                    )}
-                    <p className="text-xs text-slate-400 pt-2 border-t border-slate-700/40">
-                      {redemptionResult.message}
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {section === 'supervisors' && isRoot && (
-            <div className="overflow-y-auto space-y-6 max-w-3xl">
-              <div className="glass p-5 space-y-4">
-                <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Create supervisor</h2>
-                <p className="text-xs text-slate-500">
-                  Assign one or more drop points. Supervisors manage authorities and view items/claims in scope.
-                </p>
-                <form
-                  className="grid gap-3"
-                  onSubmit={async (e) => {
-                    e.preventDefault()
-                    if (!supervisorForm.email || !supervisorForm.password || !supervisorForm.university_id) {
-                      return toast.error('Email, password, and university are required')
-                    }
-                    setCreatingSupervisor(true)
-                    try {
-                      await createSupervisor({
-                        email: supervisorForm.email.trim(),
-                        password: supervisorForm.password,
-                        university_id: supervisorForm.university_id,
-                        drop_point_ids: supervisorForm.drop_point_ids,
-                      })
-                      toast.success('Supervisor created')
-                      setSupervisorForm({ email: '', password: '', university_id: '', drop_point_ids: [] })
-                      supervisorsQuery.refetch()
-                    } catch (err) {
-                      toast.error(err.response?.data?.detail || 'Could not create supervisor')
-                    } finally {
-                      setCreatingSupervisor(false)
-                    }
-                  }}
-                >
-                  <input
-                    type="email"
-                    className="admin-input-wide"
-                    placeholder="supervisor@university.edu"
-                    value={supervisorForm.email}
-                    onChange={(e) => setSupervisorForm((f) => ({ ...f, email: e.target.value }))}
-                  />
-                  <input
-                    type="password"
-                    className="admin-input-wide"
-                    placeholder="Password"
-                    value={supervisorForm.password}
-                    onChange={(e) => setSupervisorForm((f) => ({ ...f, password: e.target.value }))}
-                  />
-                  <select
-                    className="admin-select admin-input-wide"
-                    value={supervisorForm.university_id}
-                    onChange={(e) => setSupervisorForm((f) => ({
-                      ...f,
-                      university_id: e.target.value,
-                      drop_point_ids: [],
-                    }))}
-                  >
-                    <option value="">Select university</option>
-                    {(universitiesQuery.data || []).map((u) => (
-                      <option key={u.id} value={u.id}>{u.short_name}</option>
-                    ))}
-                  </select>
-                  {supervisorForm.university_id && (
-                    <div className="space-y-2 max-h-40 overflow-y-auto border border-slate-700/50 rounded-lg p-3">
-                      <p className="text-xs text-slate-500">Assigned drop points</p>
-                      {(supervisorDropPointsQuery.data?.drop_points || []).map((dp) => (
-                        <label key={dp.id} className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                          <input
-                            type="checkbox"
-                            checked={supervisorForm.drop_point_ids.includes(dp.id)}
-                            onChange={(e) => {
-                              setSupervisorForm((f) => ({
-                                ...f,
-                                drop_point_ids: e.target.checked
-                                  ? [...f.drop_point_ids, dp.id]
-                                  : f.drop_point_ids.filter((id) => id !== dp.id),
-                              }))
-                            }}
-                          />
-                          {dp.name}
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                  <button type="submit" className="btn-primary admin-btn-sm" disabled={creatingSupervisor}>
-                    {creatingSupervisor ? 'Creating…' : 'Create supervisor'}
-                  </button>
-                </form>
-              </div>
-
-              <div className="glass p-5 space-y-3">
-                <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Supervisors</h2>
-                {!supervisorsQuery.data?.supervisors?.length ? (
-                  <p className="text-sm text-slate-500">No supervisors yet.</p>
-                ) : (
-                  <ul className="space-y-3">
-                    {supervisorsQuery.data.supervisors.map((s) => (
-                      <li
-                        key={s.id}
-                        className="border border-slate-700/50 rounded-lg p-3 text-sm"
-                      >
-                        <div className="flex flex-wrap justify-between gap-2">
-                          <div>
-                            <p className="font-medium text-slate-800 dark:text-slate-200">{s.email}</p>
-                            <p className="text-xs text-slate-500">
-                              {s.drop_point_names.length
-                                ? s.drop_point_names.join(', ')
-                                : 'No drop points assigned'}
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            className="btn-secondary admin-btn-sm text-xs"
-                            onClick={async () => {
-                              try {
-                                await updateSupervisor(s.id, { is_active: !s.is_active })
-                                toast.success(s.is_active ? 'Deactivated' : 'Activated')
-                                supervisorsQuery.refetch()
-                              } catch (err) {
-                                toast.error(err.response?.data?.detail || 'Failed')
-                              }
-                            }}
-                          >
-                            {s.is_active ? 'Deactivate' : 'Activate'}
-                          </button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-          )}
-
-          {section === 'authorities' && isRoot && (
-            <div className="overflow-y-auto space-y-6 max-w-3xl">
-              <div className="glass p-5 space-y-4">
-                <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Create authority account</h2>
-                <p className="text-xs text-slate-500">One account per drop point. Email must be @gctu.edu.gh.</p>
-                <form
-                  className="grid gap-3 sm:grid-cols-2"
-                  onSubmit={async (e) => {
-                    e.preventDefault()
-                    if (!authorityForm.email || !authorityForm.password || !authorityForm.drop_point_id) {
-                      return toast.error('Fill in all fields')
-                    }
-                    setCreatingAuthority(true)
-                    try {
-                      await createAuthority({
-                        email: authorityForm.email.trim(),
-                        password: authorityForm.password,
-                        drop_point_id: authorityForm.drop_point_id,
-                      })
-                      toast.success('Authority account created')
-                      setAuthorityForm({ email: '', password: '', drop_point_id: '' })
-                      authoritiesQuery.refetch()
-                    } catch (err) {
-                      toast.error(err.response?.data?.detail || 'Could not create authority')
-                    } finally {
-                      setCreatingAuthority(false)
-                    }
-                  }}
-                >
-                  <input
-                    type="email"
-                    className="admin-input-wide sm:col-span-2"
-                    placeholder="authority@gctu.edu.gh"
-                    value={authorityForm.email}
-                    onChange={(e) => setAuthorityForm((f) => ({ ...f, email: e.target.value }))}
-                  />
-                  <input
-                    type="password"
-                    className="admin-input-wide"
-                    placeholder="Temporary password (min 8 chars)"
-                    value={authorityForm.password}
-                    onChange={(e) => setAuthorityForm((f) => ({ ...f, password: e.target.value }))}
-                  />
-                  <select
-                    className="admin-select"
-                    value={authorityForm.drop_point_id}
-                    onChange={(e) => setAuthorityForm((f) => ({ ...f, drop_point_id: e.target.value }))}
-                  >
-                    <option value="">Select drop point…</option>
-                    {(authDropPointsQuery.data?.drop_points || []).map((dp) => (
-                      <option key={dp.id} value={dp.id}>{dp.name}</option>
-                    ))}
-                  </select>
-                  <button type="submit" className="btn-primary sm:col-span-2 text-sm" disabled={creatingAuthority}>
-                    {creatingAuthority ? 'Creating…' : 'Create authority'}
-                  </button>
-                </form>
-              </div>
-
-              <div className="glass p-5">
-                <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-3">Authority accounts</h2>
-                {authoritiesQuery.isLoading && <QueueLoading label="authorities" />}
-                {authoritiesQuery.isError && <QueueError message="Failed to load authorities." />}
-                <div className="space-y-2">
-                  {(authoritiesQuery.data?.authorities || []).map((auth) => (
-                    <div key={auth.id} className="admin-queue-item flex flex-col gap-2">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <p className="text-sm font-medium">{auth.email}</p>
-                          <p className="text-xs text-slate-500">{auth.drop_point_name}</p>
-                          <p className={`text-xs mt-0.5 ${auth.is_active ? 'text-emerald-600' : 'text-red-500'}`}>
-                            {auth.is_active ? 'Active' : 'Deactivated'}
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            className="btn-secondary admin-btn-sm text-xs"
-                            onClick={() => {
-                              setReassignAuthId(auth.id)
-                              setReassignDropPointId('')
-                            }}
-                          >
-                            Reassign
-                          </button>
-                          <button
-                            type="button"
-                            className="btn-secondary admin-btn-sm text-xs"
-                            onClick={async () => {
-                              try {
-                                if (auth.is_active) {
-                                  await deactivateAuthority(auth.id)
-                                  toast.success('Authority deactivated')
-                                } else {
-                                  await activateAuthority(auth.id)
-                                  toast.success('Authority activated')
-                                }
-                                authoritiesQuery.refetch()
-                              } catch (err) {
-                                toast.error(err.response?.data?.detail || 'Action failed')
-                              }
-                            }}
-                          >
-                            {auth.is_active ? 'Deactivate' : 'Activate'}
-                          </button>
-                        </div>
-                      </div>
-                      {reassignAuthId === auth.id && (
-                        <div className="flex flex-wrap gap-2 items-center border-t border-slate-700/40 pt-2">
-                          <select
-                            className="admin-select flex-1 min-w-[180px]"
-                            value={reassignDropPointId}
-                            onChange={(e) => setReassignDropPointId(e.target.value)}
-                          >
-                            <option value="">Select new drop point…</option>
-                            {(authDropPointsQuery.data?.drop_points || [])
-                              .filter((dp) => dp.id !== auth.drop_point_id)
-                              .map((dp) => (
-                                <option key={dp.id} value={dp.id}>{dp.name}</option>
-                              ))}
-                          </select>
-                          <button
-                            type="button"
-                            className="btn-primary admin-btn-sm text-xs"
-                            disabled={!reassignDropPointId}
-                            onClick={async () => {
-                              try {
-                                await reassignAuthority(auth.id, reassignDropPointId)
-                                toast.success('Authority reassigned')
-                                setReassignAuthId(null)
-                                authoritiesQuery.refetch()
-                              } catch (err) {
-                                toast.error(err.response?.data?.detail || 'Reassign failed')
-                              }
-                            }}
-                          >
-                            Confirm
-                          </button>
-                          <button type="button" className="btn-secondary admin-btn-sm text-xs" onClick={() => setReassignAuthId(null)}>Cancel</button>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  {!authoritiesQuery.isLoading && !(authoritiesQuery.data?.authorities || []).length && (
-                    <p className="text-sm text-slate-500 py-4 text-center">No authority accounts yet.</p>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {section === 'settings' && (
-            <div className="max-w-lg">
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-4">Admin settings</h2>
-              <div className="glass p-6 border border-slate-800">
-                <StaffPushSettingsToggle role="admin" />
-              </div>
+          {section === 'universities' && (
+            <div className="glass p-8 text-center text-slate-500">
+              <p className="text-lg font-medium text-slate-700 dark:text-slate-300">Universities & campus zones</p>
+              <p className="text-sm mt-2">Coming soon — root admin will manage universities and campus zones here.</p>
             </div>
           )}
 
@@ -1479,28 +1041,36 @@ export default function AdminDashboardPage() {
               : a && (
             <div className="overflow-y-auto space-y-4">
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2">
-                <StatCard label="Found items posted" value={a.total_found_items} />
-                <StatCard label="Drop-off rate" value={`${a.drop_off_rate_percent}%`} />
-                <StatCard label="Avg hrs to drop-off" value={a.avg_hours_to_drop_off ?? '—'} />
-                <StatCard label="Avg hrs to claim" value={a.avg_hours_to_claim ?? '—'} />
-                <StatCard label="Tokens issued" value={a.tokens_total_issued} />
-                <StatCard label="Tokens redeemed" value={a.tokens_total_redeemed} />
+                <StatCard label="Lost items (all)" value={a.total_lost_items} />
+                <StatCard label="Found items (all)" value={a.total_found_items} />
                 <StatCard label="Returned (all)" value={a.total_returned} />
                 <StatCard label="Return rate" value={`${a.return_rate_percent}%`} />
+                <StatCard label="Lost this week" value={a.lost_items_this_week} />
                 <StatCard label="Found this week" value={a.found_items_this_week} />
                 <StatCard label="Returned this week" value={a.returned_this_week} />
-                <StatCard label="Claims pending" value={a.claims_pending_review} onClick={() => goSection('claims')} />
+                <StatCard label="Avg days post→return" value={a.avg_days_post_to_return ?? '—'} />
+                <StatCard label="Claims Path A" value={a.claims_path_a} />
+                <StatCard label="Claims Path B" value={a.claims_path_b} />
+                <StatCard label="Claims Path C" value={a.claims_path_c} />
+                <StatCard label="Disputes open / resolved" value={`${a.disputes_opened_total} / ${a.disputes_resolved_total}`} />
+                <StatCard label="Active users D/W/M" value={`${a.active_users_daily}/${a.active_users_weekly}/${a.active_users_monthly}`} />
+                <StatCard label="Fraud events (wk)" value={a.fraud_events_this_week} />
+                <StatCard label="Claims in review" value={a.claims_pending_review} highlight="amber" onClick={() => goSection('claims')} />
                 <StatCard label="Open disputes" value={a.disputes_open} highlight="amber" onClick={() => goSection('disputes')} />
                 <StatCard label="Pending reports" value={a.reports_pending} highlight="amber" onClick={() => goSection('reports')} />
+                <StatCard label="Fraud alerts" value={a.fraud_alerts} highlight="amber" onClick={() => goSection('fraud')} />
               </div>
-              {a.items_per_drop_point?.length > 0 && (
-                <div className="glass p-4">
-                  <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-3">Found items per drop point</h2>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-                    {a.items_per_drop_point.map((dp) => (
-                      <div key={dp.drop_point_id} className="admin-stat">
-                        <p className="text-[10px] text-slate-500 uppercase tracking-wide line-clamp-2">{dp.drop_point_name}</p>
-                        <p className="text-lg font-bold tabular-nums mt-1">{dp.found_item_count}</p>
+              {a.trust_distribution && (
+                <div className="admin-stat p-3">
+                  <p className="text-[10px] text-slate-500 uppercase mb-2">Trust score distribution</p>
+                  <div className="grid grid-cols-4 gap-2">
+                    {Object.entries(a.trust_distribution).map(([tier, count]) => (
+                      <div key={tier} className="text-center">
+                        <p className="text-2xl font-bold text-slate-800 dark:text-slate-100">{count}</p>
+                        <p className="text-[10px] text-slate-500 uppercase mt-1">{tier.replace(/_/g, ' ')}</p>
+                        <div className="h-1.5 mt-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                          <div className="h-full bg-brand-500 rounded-full" style={{ width: `${Math.min(100, (count / Math.max(1, Object.values(a.trust_distribution).reduce((s, v) => s + v, 0))) * 100)}%` }} />
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1508,6 +1078,28 @@ export default function AdminDashboardPage() {
               )}
             </div>
           ))}
+
+          {section === 'claims' && hasSplit && (
+            <div className="admin-toolbar">
+              <select className="admin-select" value={claimsFilters.path} onChange={(e) => { setClaimsPage(0); setClaimsFilters((f) => ({ ...f, path: e.target.value })) }}>
+                <option value="">All paths</option>
+                <option value="path_a">Path A</option>
+                <option value="path_b">Path B</option>
+                <option value="path_c">Path C</option>
+              </select>
+              <input className="admin-input-narrow" placeholder="Min" value={claimsFilters.score_min} onChange={(e) => setClaimsFilters((f) => ({ ...f, score_min: e.target.value }))} />
+              <input className="admin-input-narrow" placeholder="Max" value={claimsFilters.score_max} onChange={(e) => setClaimsFilters((f) => ({ ...f, score_max: e.target.value }))} />
+              <select className="admin-select" value={claimsFilters.sort} onChange={(e) => setClaimsFilters((f) => ({ ...f, sort: e.target.value }))}>
+                <option value="created_at_asc">Oldest</option>
+                <option value="created_at_desc">Newest</option>
+                <option value="score_desc">High score</option>
+                <option value="score_asc">Low score</option>
+              </select>
+              {claimsQuery.data?.total != null && (
+                <span className="text-[10px] text-slate-500 whitespace-nowrap">{claimsQuery.data.total} in queue</span>
+              )}
+            </div>
+          )}
 
           {section === 'reports' && hasSplit && (
             <div className="admin-toolbar">
@@ -1526,6 +1118,7 @@ export default function AdminDashboardPage() {
               <select className="admin-select" value={userFilters.role} onChange={(e) => setUserFilters((f) => ({ ...f, role: e.target.value }))}>
                 <option value="">All roles</option>
                 <option value="user">User</option>
+                <option value="assistant_root_admin">Assistant</option>
                 <option value="root_admin">Root</option>
               </select>
               <select className="admin-select" value={userFilters.status} onChange={(e) => setUserFilters((f) => ({ ...f, status: e.target.value }))}>
@@ -1604,6 +1197,18 @@ export default function AdminDashboardPage() {
               />
               <select
                 className="admin-select"
+                value={returnedFilters.tipped}
+                onChange={(e) => {
+                  setReturnedPage(0)
+                  setReturnedFilters((f) => ({ ...f, tipped: e.target.value }))
+                }}
+              >
+                <option value="">All tips</option>
+                <option value="yes">Tipped</option>
+                <option value="no">Not tipped</option>
+              </select>
+              <select
+                className="admin-select"
                 value={returnedFilters.sort}
                 onChange={(e) => setReturnedFilters((f) => ({ ...f, sort: e.target.value }))}
               >
@@ -1617,21 +1222,12 @@ export default function AdminDashboardPage() {
                 <option value="category_desc">Category Z–A</option>
                 <option value="owner_asc">Owner A–Z</option>
                 <option value="finder_asc">Finder A–Z</option>
+                <option value="tipped_desc">Tipped first</option>
+                <option value="tipped_asc">Not tipped first</option>
               </select>
               {returnedQuery.data?.total != null && (
                 <span className="text-[10px] text-slate-500 whitespace-nowrap">{returnedQuery.data.total} returned</span>
               )}
-            </div>
-          )}
-
-          {section === 'claims' && hasSplit && isRoot && (
-            <div className="admin-toolbar">
-              <input
-                className="admin-input-wide"
-                placeholder="Filter by drop point or description…"
-                value={claimsFilter}
-                onChange={(e) => setClaimsFilter(e.target.value)}
-              />
             </div>
           )}
 
@@ -1650,7 +1246,7 @@ export default function AdminDashboardPage() {
                   const detailText = formatAdminLogDetail(log)
                   return (
                     <div key={log.id} className="admin-queue-item">
-                      <p className="text-slate-700 dark:text-slate-300">
+                      <p className="text-slate-300">
                         <span className="text-brand-400">{formatAdminActionLabel(log.action)}</span>
                         {' · '}
                         {log.admin_email || 'system'}
@@ -1680,6 +1276,13 @@ export default function AdminDashboardPage() {
                 {!queueQuery?.isLoading && !queueQuery?.isError && listItems}
                 {!queueQuery?.isLoading && !queueQuery?.isError && listItems.length === 0 && (
                   <EmptyQueue section={section} />
+                )}
+                {section === 'claims' && claimsQuery.data?.total > CLAIMS_PAGE_SIZE && (
+                  <div className="flex gap-2 pt-2">
+                    <button type="button" className="btn-secondary text-xs py-1" disabled={claimsPage === 0} onClick={() => setClaimsPage((p) => p - 1)}>Prev</button>
+                    <span className="text-xs text-slate-500 self-center">Page {claimsPage + 1}</span>
+                    <button type="button" className="btn-secondary text-xs py-1" disabled={(claimsPage + 1) * CLAIMS_PAGE_SIZE >= claimsQuery.data.total} onClick={() => setClaimsPage((p) => p + 1)}>Next</button>
+                  </div>
                 )}
                 {section === 'returned' && returnedQuery.data?.total > RETURNED_PAGE_SIZE && (
                   <div className="flex gap-2 pt-2">
@@ -1721,9 +1324,6 @@ export default function AdminDashboardPage() {
           }
         }}
       />
-
-      <AdminPushPromptTrigger />
-      <StaffPushPromptBanner role="admin" enabled={isAdminRole(user?.role)} />
     </div>
   )
 }

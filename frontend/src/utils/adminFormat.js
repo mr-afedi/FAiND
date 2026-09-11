@@ -37,14 +37,14 @@ export function pathBadge(path) {
 }
 
 export const EMPTY_STATES = {
+  claims: 'No claims awaiting review — all caught up!',
   disputes: 'No open disputes — queue is clear.',
   reports: 'No pending reports — nothing to review.',
+  fraud: 'No fraud alerts above threshold.',
   posts: 'No active posts match your filters.',
   users: 'No users match your search.',
   logs: 'No admin log entries match your filters.',
   returned: 'No returned items match your filters.',
-  claims: 'No claims on found items yet.',
-  drop_points: 'No drop points configured.',
 }
 
 export const ITEM_CATEGORIES = [
@@ -58,8 +58,8 @@ export function formatDateShort(iso) {
 }
 
 const ADMIN_ACTION_LABELS = {
-  promote_admin: 'Admin role changed',
-  demote_admin: 'Admin role changed',
+  promote_admin: 'Promoted to assistant admin',
+  demote_admin: 'Demoted from assistant admin',
   suspend_user: 'User suspended',
   unsuspend_user: 'User unsuspended',
   approve_claim: 'Claim approved',
@@ -70,21 +70,14 @@ const ADMIN_ACTION_LABELS = {
   dismiss_report: 'Report dismissed',
   warn_user: 'User warned',
   suppress_reporter: 'Reporter suppressed',
+  confirm_fraud: 'Fraud confirmed',
+  clear_fraud_flag: 'Fraud flag cleared',
+  allow_verification: 'Verification allowed',
   request_more_info: 'More info requested',
+  trust_adjustment: 'Trust adjustment',
   lock_item: 'Item locked',
   escalate_dispute: 'Dispute escalated',
   open_manual_dispute: 'Manual dispute opened',
-  token_settings_update: 'Token settings updated',
-  redemption_redeemed: 'Redemption code redeemed',
-  drop_point_create: 'Drop point created',
-  drop_point_update: 'Drop point updated',
-  authority_create: 'Authority account created',
-  authority_activate: 'Authority activated',
-  authority_deactivate: 'Authority deactivated',
-  authority_reassign: 'Authority reassigned',
-  supervisor_create: 'Supervisor created',
-  supervisor_update: 'Supervisor updated',
-  handover_override: 'Handover completed (authority override)',
 }
 
 const TARGET_TYPE_LABELS = {
@@ -95,13 +88,6 @@ const TARGET_TYPE_LABELS = {
   dispute: 'Dispute',
   post_report: 'Post report',
   user_report: 'User report',
-  drop_point: 'Drop point',
-  authority: 'Authority',
-  supervisor: 'Supervisor',
-  claim: 'Claim',
-  handover: 'Handover',
-  redemption_code: 'Redemption code',
-  token_settings: 'Token settings',
 }
 
 function shortId(id) {
@@ -131,11 +117,42 @@ export function formatAdminLogTarget(log) {
   return id ? `${label} ${id}` : label
 }
 
+const FRAUD_SIGNAL_LABELS = {
+  failed_verifications_2_in_24h: '2 failed verifications in 24h',
+  failed_verifications_3_in_24h: '3 failed verifications in 24h',
+  repeated_low_score_multi_item: 'Repeated low-score claims',
+  path_b_c_claim_failed: 'Path B/C claim failed',
+  unusual_claim_volume: 'Unusual claim volume',
+  user_report_received: 'User report received',
+  admin_confirmed_fraud: 'Admin confirmed fraud',
+  admin_cleared_flag: 'Admin cleared flag',
+  admin_verification_override: 'Verification override granted',
+  gradual_improvement: 'Gradual score improvement',
+  risk_tier_high: 'Risk tier crossed to high',
+  dispute_user_flagged: 'Flagged in dispute resolution',
+}
+
+export function formatFraudSignal(signal) {
+  return FRAUD_SIGNAL_LABELS[signal] || (signal || '').replace(/_/g, ' ')
+}
+
 export function formatAdminLogDetail(log) {
   const { action, detail = {} } = log
   if (!detail || Object.keys(detail).length === 0) return null
 
   switch (action) {
+    case 'trust_adjustment': {
+      const { delta, reason, trust_before, trust_after } = detail
+      const change = scoreChange(trust_before, trust_after)
+      const parts = []
+      if (change) {
+        parts.push(`Trust score changed from ${trust_before} to ${trust_after} (${signedDelta(delta)}).`)
+      } else if (delta != null) {
+        parts.push(`Trust score adjusted by ${signedDelta(delta)}.`)
+      }
+      if (reason) parts.push(`Reason: ${reason}`)
+      return parts.join(' ')
+    }
     case 'approve_claim':
       return [
         detail.match_score != null && `Match score ${formatScorePct(detail.match_score)}.`,
@@ -163,6 +180,13 @@ export function formatAdminLogDetail(log) {
       return detail.reason ? `Reason: ${detail.reason}` : 'Account suspended.'
     case 'unsuspend_user':
       return 'Account access restored.'
+    case 'confirm_fraud':
+    case 'clear_fraud_flag':
+      return scoreChange(detail.fraud_risk_before, detail.fraud_risk_after)
+        ? `Fraud risk ${detail.fraud_risk_before} → ${detail.fraud_risk_after}.`
+        : null
+    case 'allow_verification':
+      return 'Verification override enabled for this user.'
     case 'lock_item':
       return [
         detail.reason && `Reason: ${detail.reason}`,
@@ -185,40 +209,6 @@ export function formatAdminLogDetail(log) {
       ].filter(Boolean).join(' ') || null
     case 'suppress_reporter':
       return 'Reporter marked as bad faith; future reports deprioritized.'
-    case 'token_settings_update':
-      return Object.entries(detail)
-        .map(([field, change]) => `${field.replace(/_/g, ' ')}: ${change.from} → ${change.to}`)
-        .join(' · ') || null
-    case 'redemption_redeemed':
-      return [
-        detail.code && `Code ${detail.code}.`,
-        detail.token_amount != null && `${detail.token_amount} tokens.`,
-        detail.supervisor_id && 'Redeemed by supervisor.',
-      ].filter(Boolean).join(' ') || null
-    case 'drop_point_create':
-      return [
-        detail.name && `Name: ${detail.name}.`,
-        detail.type && `Type: ${detail.type}.`,
-      ].filter(Boolean).join(' ') || null
-    case 'drop_point_update':
-      return Object.entries(detail)
-        .map(([field, change]) => `${field}: ${change.from} → ${change.to}`)
-        .join(' · ') || null
-    case 'authority_create':
-      return [
-        detail.email && `Email: ${detail.email}.`,
-        detail.drop_point_name && `Drop point: ${detail.drop_point_name}.`,
-      ].filter(Boolean).join(' ') || null
-    case 'authority_reassign':
-      return [
-        detail.from_drop_point_name && detail.to_drop_point_name
-          && `${detail.from_drop_point_name} → ${detail.to_drop_point_name}.`,
-      ].filter(Boolean).join(' ') || null
-    case 'supervisor_create':
-    case 'supervisor_update':
-      return detail.email ? `Supervisor: ${detail.email}` : null
-    case 'handover_override':
-      return detail.note ? `Note: ${detail.note}` : null
     default:
       return Object.entries(detail)
         .map(([key, value]) => {

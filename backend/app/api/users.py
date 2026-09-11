@@ -1,7 +1,9 @@
 """
 User profile and settings route handlers.
+Business logic in user_service — handlers only do HTTP concerns.
+IDOR enforced: users can only modify their own data.
 """
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -16,9 +18,9 @@ from app.schemas.user import (
     DeleteAccountRequest,
 )
 from app.schemas.auth import MessageResponse
-from app.schemas.token import UserTokensResponse, TokenLedgerEntryResponse
-from app.schemas.redemption import RedeemTokensRequest, RedeemTokensResponse
-from app.services import user_service, token_service, redemption_service
+from app.schemas.trust import TrustHistoryResponse, TrustEventResponse
+from app.services import user_service
+import app.services.trust_service as trust_service
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -29,39 +31,6 @@ def get_own_profile(
     db: Session = Depends(get_db),
 ):
     return user_service.get_own_profile(db, current_user)
-
-
-@router.get("/me/tokens", response_model=UserTokensResponse)
-def get_my_tokens(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    balance = token_service.get_user_token_balance(db, current_user.id)
-    entries = token_service.list_user_ledger_entries(db, current_user.id)
-    return UserTokensResponse(
-        balance=balance,
-        recent=[
-            TokenLedgerEntryResponse(
-                id=e.id,
-                delta=e.delta,
-                reason=e.reason.value,
-                reference_item_id=e.reference_item_id,
-                created_at=e.created_at,
-            )
-            for e in entries
-        ],
-    )
-
-
-@router.post("/me/tokens/redeem", response_model=RedeemTokensResponse)
-def redeem_tokens(
-    payload: RedeemTokensRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    result = redemption_service.create_redemption_code(db, current_user, payload)
-    db.commit()
-    return result
 
 
 @router.patch("/me", response_model=OwnProfileResponse)
@@ -104,9 +73,33 @@ def delete_account(
     return {"message": "Your account has been deleted."}
 
 
+@router.get("/me/trust-events", response_model=TrustHistoryResponse)
+def get_own_trust_history(
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=50),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Returns the authenticated user's trust score, tier label, and
+    paginated event history (Section 17.2 — own dashboard: raw number).
+    """
+    events = trust_service.get_user_trust_events(db, current_user.id, skip=skip, limit=limit)
+    return TrustHistoryResponse(
+        trust_score=current_user.trust_score,
+        tier=trust_service.get_trust_tier(current_user.trust_score),
+        events=[TrustEventResponse.model_validate(e) for e in events],
+        total=len(events),
+    )
+
+
 @router.get("/{username}", response_model=PublicProfileResponse)
 def get_public_profile(
     username: str,
     db: Session = Depends(get_db),
 ):
+    """
+    Public profile — only returns Section 23.1-allowed fields.
+    No auth required. Returns 404 for suspended/deleted users.
+    """
     return user_service.get_public_profile(db, username)

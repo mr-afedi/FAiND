@@ -357,7 +357,13 @@ export default function ReturnConfirmPage() {
           )}
         </section>
 
-
+        {status.conversation_id && (
+          <p className="text-center mt-6 text-sm">
+            <Link to={`/messages/${status.conversation_id}`} className="text-brand-600 hover:underline">
+              Open chat
+            </Link>
+          </p>
+        )}
       </div>
     </div>
   )

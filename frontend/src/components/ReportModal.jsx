@@ -15,6 +15,7 @@ export default function ReportModal({
   onClose,
   type,
   targetId,
+  conversationId = null,
   targetLabel = '',
 }) {
   const [reason, setReason] = useState('')
@@ -30,7 +31,10 @@ export default function ReportModal({
       if (type === 'post') {
         return reportPost(targetId, payload)
       }
-      return reportUser(targetId, payload)
+      return reportUser(targetId, {
+        ...payload,
+        conversation_id: conversationId,
+      })
     },
     onSuccess: (data) => {
       toast.success(data.message || 'Report submitted.')

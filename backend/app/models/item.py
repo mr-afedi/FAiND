@@ -15,8 +15,6 @@ class ItemType(str, PyEnum):
 class ItemStatus(str, PyEnum):
     OPEN                = "open"
     FOUND               = "found"
-    OVERDUE             = "overdue"
-    UNCONFIRMED         = "unconfirmed"
     POTENTIAL_MATCH     = "potential_match"
     UNDER_VERIFICATION  = "under_verification"
     UNDER_DISPUTE       = "under_dispute"
@@ -24,8 +22,6 @@ class ItemStatus(str, PyEnum):
     EXPIRED             = "expired"
     ARCHIVED            = "archived"
     CLOSED              = "closed"
-    AT_DROPPOINT        = "at_droppoint"
-    UNDER_CLAIM_REVIEW  = "under_claim_review"
 
 
 class ItemCategory(str, PyEnum):
@@ -49,8 +45,8 @@ class Item(Base):
     university_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("universities.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    posted_by_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=True, index=True
+    posted_by_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
     )
 
     item_type: Mapped[ItemType] = mapped_column(
@@ -68,8 +64,7 @@ class Item(Base):
 
     public_description: Mapped[str] = mapped_column(Text, nullable=False)
 
-    description_embedding: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-
+    # Location — FK for zone + denormalized label/coords for display
     location_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("campus_zones.id", ondelete="SET NULL"), nullable=True
     )
@@ -77,36 +72,13 @@ class Item(Base):
     location_lat: Mapped[float | None] = mapped_column(nullable=True)
     location_lng: Mapped[float | None] = mapped_column(nullable=True)
 
-    drop_point_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("drop_points.id", ondelete="SET NULL"), nullable=True, index=True
-    )
-    tracking_reference: Mapped[str | None] = mapped_column(
-        String(8), nullable=True, unique=True, index=True
-    )
-
-    finder_dropped_off_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    authority_received_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    dropoff_confirmed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    dropoff_qr_payload: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    dropoff_qr_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    dropoff_qr_consumed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    dropoff_reminder_sent_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    dropoff_late: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-
+    # Date the item was lost / found (user-provided)
     date_occurred: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
+    # Images — Cloudinary URLs, max 2 (Section 6, Section 7)
     image_urls: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
 
+    # Lifecycle (Section 21)
     expiry_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     extensions_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     expiry_reminder_sent_at: Mapped[datetime | None] = mapped_column(
@@ -116,9 +88,16 @@ class Item(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # Admin flags
     admin_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     hidden_by_suspension: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Path B bridge found item — hidden from public browse (Feature J)
+    path_b_bridge: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Path C bridge lost item — hidden from public browse (V4.3)
+    path_c_bridge: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
@@ -129,6 +108,38 @@ class Item(Base):
         nullable=False,
     )
 
-    posted_by: Mapped["User | None"] = relationship("User", foreign_keys=[posted_by_id])
+    # Relationships
+    posted_by: Mapped["User"] = relationship("User", foreign_keys=[posted_by_id])
     location: Mapped["CampusZone"] = relationship("CampusZone", foreign_keys=[location_id])
-    drop_point: Mapped["DropPoint | None"] = relationship("DropPoint", foreign_keys=[drop_point_id])
+    hidden_questions: Mapped[list["ItemHiddenQuestion"]] = relationship(
+        "ItemHiddenQuestion", back_populates="item", cascade="all, delete-orphan",
+        order_by="ItemHiddenQuestion.position"
+    )
+
+
+class ItemHiddenQuestion(Base):
+    """
+    Verification Q&A on lost and found items (V4.3).
+    Lost: owner sets questions; finder answers in Path B.
+    Found: finder sets questions; owner answers in Path A/C.
+    Both fields AES-256-GCM encrypted; answers never returned in API responses.
+    """
+    __tablename__ = "item_hidden_questions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # question is encrypted — decrypted only during verification (never logged)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    # answer is encrypted — decrypted in memory only during scoring (never returned in any API)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)  # 1, 2, or 3
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+    item: Mapped["Item"] = relationship("Item", back_populates="hidden_questions")
