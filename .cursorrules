@@ -1,0 +1,16 @@
+This project is FAiND — an AI-powered lost and found platform for university campuses.
+
+Always read and follow FAIND_BRAIN_V4.1.md as the single source of truth.
+
+Rules:
+- Stack is fixed: React + Vite + Tailwind + FastAPI + PostgreSQL + SQLAlchemy
+- All DB access via SQLAlchemy ORM — no raw SQL ever
+- All routes protected with JWT — verify on backend always
+- IDOR prevention on every resource endpoint
+- Sensitive fields (hidden answers, tip amounts) always AES-256-GCM encrypted
+- Never expose admin-only fields in public API responses
+- Business logic in services, not route handlers
+- Do not introduce technologies outside the defined stack
+- Do not rewrite working systems unless instructed
+- Build one feature at a time, modularly
+- rate limiting via slowapi only

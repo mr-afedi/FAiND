@@ -1,0 +1,91 @@
+/**
+ * PushPromptBanner — contextual push-permission prompt (Section 11.3 / 29.2).
+ *
+ * Shown only after a notification-worthy event (never on login).
+ */
+import { useEffect, useState } from 'react'
+import { usePushNotifications } from '../hooks/usePushNotifications'
+import { useAuth } from '../context/AuthContext'
+import toast from 'react-hot-toast'
+import { Bell } from './icons'
+import {
+  dismissPushPrompt,
+  isPushPromptDismissed,
+  isPushPromptReady,
+  PUSH_PROMPT_READY_EVENT,
+} from '../utils/pushPrompt'
+
+export default function PushPromptBanner() {
+  const { isAuthenticated } = useAuth()
+  const { supported, permissionState, isSubscribed, loading, requestPermissionAndSubscribe } =
+    usePushNotifications()
+
+  const [promptReady, setPromptReady] = useState(() => isPushPromptReady())
+  const [dismissed, setDismissed] = useState(() => isPushPromptDismissed())
+
+  useEffect(() => {
+    const onReady = () => setPromptReady(true)
+    window.addEventListener(PUSH_PROMPT_READY_EVENT, onReady)
+    return () => window.removeEventListener(PUSH_PROMPT_READY_EVENT, onReady)
+  }, [])
+
+  if (
+    !isAuthenticated ||
+    !supported ||
+    !promptReady ||
+    permissionState !== 'default' ||
+    isSubscribed ||
+    dismissed
+  ) {
+    return null
+  }
+
+  const handleAccept = async () => {
+    const ok = await requestPermissionAndSubscribe()
+    if (ok) {
+      toast.success('Push notifications enabled! You will be alerted for important updates.')
+    } else {
+      toast('You can enable push notifications later in Settings.', { icon: <Bell className="w-5 h-5" /> })
+    }
+    dismissPushPrompt()
+    setDismissed(true)
+  }
+
+  const handleDismiss = () => {
+    dismissPushPrompt()
+    setDismissed(true)
+  }
+
+  return (
+    <div className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] left-0 right-0 z-50 flex justify-center px-4 pointer-events-none">
+      <div className="pointer-events-auto w-full max-w-sm bg-white dark:bg-gray-800 border border-blue-200 dark:border-blue-700 rounded-2xl shadow-2xl p-4 flex gap-3 items-start">
+        <Bell className="w-6 h-6 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" aria-hidden />
+        <div className="flex-1">
+          <p className="text-sm font-semibold text-gray-900 dark:text-white">
+            Turn on push notifications?
+          </p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            Get alerts for matches like this on your phone or desktop — even when the app is closed.
+          </p>
+          <div className="flex gap-2 mt-3">
+            <button
+              type="button"
+              onClick={handleAccept}
+              disabled={loading}
+              className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-2 rounded-lg transition-colors disabled:opacity-60"
+            >
+              {loading ? 'Enabling…' : 'Accept'}
+            </button>
+            <button
+              type="button"
+              onClick={handleDismiss}
+              className="flex-1 border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 text-xs font-semibold py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            >
+              Not now
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
