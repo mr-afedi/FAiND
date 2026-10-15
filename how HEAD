@@ -1,0 +1,47 @@
+[33mcommit 1bc288c89275e6b03ab40fa28a778eeccd30c305[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m
+Author: Edmund Afedi <kobbykay03@gmail.com>
+Date:   Thu Sep 10 12:43:24 2026 +0000
+
+    Bug fix and changes
+
+ FAIND_BRAIN_V5.0.md                                                     |  741 [32m++++++++++++++++++++++++[m
+ PROGRESS.md                                                             |   60 [32m+[m[31m-[m
+ backend/alembic/versions/a4w5b6c7d8e9_w4_drop_off_confirmation.py       |   65 [32m+++[m
+ backend/alembic/versions/b5w6c7d8e9f0_w5_token_escrow.py                |  124 [32m++++[m
+ backend/alembic/versions/c6w7d8e9f0a1_w6_authority_auth.py              |   63 [32m+++[m
+ backend/alembic/versions/d8w9e0f1a2b3_w8_claims.py                      |   67 [32m+++[m
+ backend/alembic/versions/e9w0f1a2b3c4_w10_handover.py                   |   47 [32m++[m
+ backend/alembic/versions/f0w1a2b3c4d5_w11_token_settings.py             |   45 [32m++[m
+ backend/alembic/versions/g1w2a3b4c5d6_w12_redemption.py                 |   70 [32m+++[m
+ backend/alembic/versions/h2w3a4b5c6d7_w13_structured_messaging.py       |   73 [32m+++[m
+ backend/alembic/versions/i3w4a5b6c7d8_w14_supervisors.py                |   48 [32m++[m
+ backend/alembic/versions/j4w5a6b7c8d9_w15_admin_dashboard.py            |   36 [32m++[m
+ backend/alembic/versions/k5w6a7b8c9d0_w16_notifications.py              |   32 [32m++[m
+ backend/alembic/versions/l6w7a8b9c0d1_authority_alerts.py               |   60 [32m++[m
+ backend/alembic/versions/m7w8a9b0c1d2_handover_item_returns.py          |   40 [32m++[m
+ backend/alembic/versions/n8w9a0b1c2d3_description_embeddings.py         |   28 [32m+[m
+ backend/alembic/versions/q1w2e3r4t5y6_v5_claims_interest_staff_push.py  |  115 [32m++++[m
+ backend/alembic/versions/r2s3t4u5v6w7_path_a_optional_claim_datetime.py |   47 [32m++[m
+ backend/alembic/versions/x1w2c3d4e5f6_w1_v5_removal_pass.py             |  129 [32m+++++[m
+ backend/alembic/versions/y2w3d4e5f6a7_add_drop_points_table.py          |   55 [32m++[m
+ backend/alembic/versions/z3w4d5e6f7a8_w3_found_item_reporting.py        |   44 [32m++[m
+ backend/app/api/admin_dashboard.py                                      |  333 [32m++++++[m[31m-----[m
+ backend/app/api/admin_fraud.py                                          |  136 [31m-----[m
+ backend/app/api/admin_tips.py                                           |   23 [31m-[m
+ backend/app/api/authority.py                                            |  409 [32m++++++++++++++[m
+ backend/app/api/chat_ws.py                                              |   99 [31m----[m
+ backend/app/api/claims.py                                               |   88 [32m+++[m
+ backend/app/api/drop_off.py                                             |  134 [32m+++++[m
+ backend/app/api/drop_points.py                                          |   63 [32m+++[m
+ backend/app/api/handover.py                                             |   37 [32m++[m
+ backend/app/api/items.py                                                |  119 [32m++[m[31m--[m
+ backend/app/api/matches.py                                              |   49 [32m+[m[31m-[m
+ backend/app/api/messages.py                                             |   84 [31m---[m
+ backend/app/api/push.py                                                 |   61 [32m+[m[31m-[m
+ backend/app/api/returns.py                                              |   10 [31m-[m
+ backend/app/api/supervisor.py                                           |  438 [32m+++++++++++++++[m
+ backend/app/api/tipping.py                                              |   71 [31m---[m
+ backend/app/api/tokens.py                                               |  133 [32m+++++[m
+ backend/app/api/users.py                                                |   67 [32m++[m[31m-[m
+ backend/app/api/verification.py                                         |   96 [31m----[m
+ backend/app/core/config.py                                              |   12 [32m+[m[31m-[m

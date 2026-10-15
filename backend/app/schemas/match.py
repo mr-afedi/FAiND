@@ -16,8 +16,8 @@ class MatchItemSummary(BaseModel):
     location_label: str
     image_urls: list[str]
     date_occurred: datetime
-        posted_by_username: str | None = None
-        posted_by_display_name: str | None = None
+    posted_by_username: str | None = None
+    posted_by_display_name: str | None = None
 
     model_config = {"from_attributes": True}
 
