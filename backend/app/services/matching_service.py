@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -74,7 +75,15 @@ def set_app_sentence_model(model) -> None:
 
 
 def load_sentence_model_at_startup():
-    """Load all-MiniLM-L6-v2 once at startup (~80MB). Returns None if unavailable."""
+    """Load the ML model unless disabled by deployment configuration."""
+    if os.getenv("FAIND_DISABLE_SENTENCE_MODEL", "").strip().lower() in {
+        "1", "true", "yes"
+    }:
+        logger.warning(
+            "[ML] Sentence model disabled by configuration — using text fallback"
+        )
+        return None
+
     logger.info("[ML] Loading sentence-transformers model all-MiniLM-L6-v2 at startup...")
     try:
         from sentence_transformers import SentenceTransformer
